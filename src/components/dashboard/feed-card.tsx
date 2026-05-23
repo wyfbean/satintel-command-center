@@ -20,21 +20,32 @@ type FeedCardProps = {
   item: IntelItem;
   active: boolean;
   onSelect: () => void;
+  registerNode?: (id: string, node: HTMLElement | null) => void;
 };
 
-export function FeedCard({ item, active, onSelect }: FeedCardProps) {
+export function FeedCard({ item, active, onSelect, registerNode }: FeedCardProps) {
   return (
-    <article className="grid grid-cols-[54px_1fr] gap-4">
+    <article
+      id={`news-${item.id}`}
+      ref={(node) => registerNode?.(item.id, node)}
+      data-news-id={item.id}
+      className="scroll-mt-28 grid grid-cols-[54px_1fr] gap-4"
+    >
       <div className="flex flex-col items-center">
-        <div className="rounded-full border border-[#dfe7ff] bg-white px-2 py-1 text-[11px] font-medium text-[#3d74ff]">
+        <div
+          className={`rounded-full border px-2 py-1 text-[11px] font-medium transition ${
+            active ? "border-[#3d74ff] bg-[#3d74ff] text-white" : "border-[#dfe7ff] bg-white text-[#3d74ff]"
+          }`}
+        >
           {item.timelineLabel}
         </div>
-        <div className="mt-3 h-full w-px bg-[#e7e9ef]" />
+        <div className={`mt-3 h-full w-px transition ${active ? "bg-[#3d74ff]" : "bg-[#e7e9ef]"}`} />
       </div>
 
       <button
         type="button"
         onClick={onSelect}
+        aria-current={active ? "true" : undefined}
         className={`w-full rounded-[28px] border bg-white p-5 text-left transition ${
           active
             ? "border-[#bfd0ff] shadow-[0_14px_34px_rgba(61,116,255,0.12)]"

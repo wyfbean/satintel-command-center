@@ -1,9 +1,10 @@
 "use client";
 
-import { useDeferredValue, useMemo, useState, useTransition } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import { ChatPanel } from "@/components/dashboard/chat-panel";
 import { FeedCard } from "@/components/dashboard/feed-card";
+import { frontendMockDashboardData } from "@/lib/mock/frontend-dashboard";
 import type { BriefingSection, DashboardData } from "@/types/intel";
 
 function formatDateTime(isoString: string) {
@@ -20,14 +21,20 @@ type DashboardShellProps = {
   initialData: DashboardData;
 };
 
+const useFrontendMock = process.env.NEXT_PUBLIC_FEED_MODE === "mock";
+
 export function DashboardShell({ initialData }: DashboardShellProps) {
-  const [data, setData] = useState(initialData);
-  const [selectedId, setSelectedId] = useState(initialData.items[0]?.id ?? "");
+  const bootData = useFrontendMock ? frontendMockDashboardData : initialData;
+  const [data, setData] = useState(bootData);
+  const [selectedId, setSelectedId] = useState(bootData.items[0]?.id ?? "");
   const [sourceFilter, setSourceFilter] = useState<string>("全部");
   const [query, setQuery] = useState("");
-  const [briefing, setBriefing] = useState<BriefingSection[]>(initialData.briefing);
+  const [briefing, setBriefing] = useState<BriefingSection[]>(bootData.briefing);
+  const [scrollProgress, setScrollProgress] = useState(0);
   const [isPending, startTransition] = useTransition();
   const deferredQuery = useDeferredValue(query);
+  const feedNodeMap = useRef(new Map<string, HTMLElement>());
+  const scrollFrameRef = useRef<number | null>(null);
 
   const filteredItems = useMemo(() => {
     const normalizedQuery = deferredQuery.trim().toLowerCase();
@@ -43,8 +50,84 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
   }, [data.items, deferredQuery, sourceFilter]);
 
   const selectedItem = filteredItems.find((item) => item.id === selectedId) ?? filteredItems[0] ?? data.items[0];
+  const activeIndex = Math.max(
+    0,
+    filteredItems.findIndex((item) => item.id === selectedItem?.id),
+  );
+  const visibleDateLabels = ["现在", data.dateTitle.slice(5), "5.22", "5.21", "5.20"];
+
+  useEffect(() => {
+    const handleScroll = () => {
+      const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+      const nextProgress = scrollable <= 0 ? 0 : Math.min(1, Math.max(0, window.scrollY / scrollable));
+      const viewportAnchor = Math.min(window.innerHeight * 0.38, 280);
+      const nearest = filteredItems
+        .map((item) => {
+          const node = feedNodeMap.current.get(item.id);
+          const rect = node?.getBoundingClientRect();
+
+          return {
+            id: item.id,
+            distance: rect ? Math.abs(rect.top - viewportAnchor) : Number.POSITIVE_INFINITY,
+          };
+        })
+        .sort((left, right) => left.distance - right.distance)[0];
+
+      setScrollProgress(nextProgress);
+
+      if (nearest?.id) {
+        setSelectedId((current) => (current === nearest.id ? current : nearest.id));
+      }
+    };
+    const scheduleScrollUpdate = () => {
+      if (scrollFrameRef.current !== null) {
+        return;
+      }
+
+      scrollFrameRef.current = window.requestAnimationFrame(() => {
+        scrollFrameRef.current = null;
+        handleScroll();
+      });
+    };
+
+    scheduleScrollUpdate();
+    window.addEventListener("scroll", scheduleScrollUpdate, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", scheduleScrollUpdate);
+
+      if (scrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = null;
+      }
+    };
+  }, [filteredItems]);
+
+  function registerFeedNode(id: string, node: HTMLElement | null) {
+    if (node) {
+      feedNodeMap.current.set(id, node);
+      return;
+    }
+
+    feedNodeMap.current.delete(id);
+  }
+
+  function scrollToItem(id: string) {
+    setSelectedId(id);
+    feedNodeMap.current.get(id)?.scrollIntoView({
+      block: "center",
+      behavior: "smooth",
+    });
+  }
 
   async function refreshFeed() {
+    if (useFrontendMock) {
+      setData(frontendMockDashboardData);
+      setBriefing(frontendMockDashboardData.briefing);
+      setSelectedId(frontendMockDashboardData.items[0]?.id ?? "");
+      return;
+    }
+
     const response = await fetch("/api/feed");
     const nextData = (await response.json()) as DashboardData;
     setData(nextData);
@@ -53,6 +136,11 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
   }
 
   async function refreshBriefing() {
+    if (useFrontendMock) {
+      setBriefing(frontendMockDashboardData.briefing);
+      return;
+    }
+
     const response = await fetch("/api/briefing");
     const payload = (await response.json()) as { briefing: BriefingSection[] };
     setBriefing(payload.briefing);
@@ -141,8 +229,8 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
           </section>
         </header>
 
-        <section className="grid gap-8 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
-          <aside className="space-y-4">
+        <section className="grid items-start gap-8 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+          <aside className="space-y-4 xl:sticky xl:top-6">
             <div className="rounded-[28px] border border-[#ebedf2] bg-white p-5">
               <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">来源过滤</div>
               <div className="mt-4 flex flex-wrap gap-2">
@@ -160,6 +248,43 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
                     {source}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div className="rounded-[28px] border border-[#ebedf2] bg-white p-5">
+              <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">滑动索引</div>
+              <div className="mt-4 flex items-start gap-4">
+                <div className="relative h-48 w-px bg-[#e2e6ef]">
+                  <div
+                    className="absolute left-1/2 top-0 w-0.5 -translate-x-1/2 rounded-full bg-[#3d74ff] transition-all"
+                    style={{ height: `${Math.max(6, scrollProgress * 100)}%` }}
+                  />
+                  <div
+                    className="absolute left-1/2 h-3 w-3 -translate-x-1/2 rounded-full border-2 border-white bg-[#3d74ff] shadow-[0_0_0_4px_rgba(61,116,255,0.12)] transition-all"
+                    style={{ top: `calc(${Math.min(1, scrollProgress) * 100}% - 6px)` }}
+                  />
+                </div>
+                <div className="space-y-5">
+                  {visibleDateLabels.map((label, index) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => {
+                        if (index === 0 || index === 1) {
+                          scrollToItem(filteredItems[0]?.id ?? "");
+                        }
+                      }}
+                      className={`block text-left font-mono ${
+                        index < 2 ? "text-2xl font-semibold text-[#3d74ff]" : "text-lg text-slate-300"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-5 rounded-[18px] bg-[#f7f9ff] px-4 py-3 text-sm text-slate-500">
+                当前第 {filteredItems.length ? activeIndex + 1 : 0} / {filteredItems.length} 条
               </div>
             </div>
 
@@ -200,9 +325,15 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
                 </div>
               </div>
 
-              <div className="scrollbar-thin mt-6 max-h-[1200px] space-y-6 overflow-y-auto pr-2">
+              <div className="mt-6 space-y-6 pr-2">
                 {filteredItems.map((item) => (
-                  <FeedCard key={item.id} item={item} active={item.id === selectedItem?.id} onSelect={() => setSelectedId(item.id)} />
+                  <FeedCard
+                    key={item.id}
+                    item={item}
+                    active={item.id === selectedItem?.id}
+                    onSelect={() => scrollToItem(item.id)}
+                    registerNode={registerFeedNode}
+                  />
                 ))}
                 {filteredItems.length === 0 ? (
                   <div className="rounded-[24px] border border-dashed border-[#d9deea] p-8 text-center text-sm text-slate-400">
@@ -213,7 +344,7 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
             </div>
           </section>
 
-          <aside className="space-y-5">
+          <aside className="space-y-5 xl:sticky xl:top-6">
             <section className="rounded-[28px] border border-[#ebedf2] bg-white p-5 shadow-[0_12px_28px_rgba(28,42,71,0.06)]">
               <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">AI 抓取摘要</div>
               <h2 className="mt-2 text-2xl font-semibold text-slate-900">{selectedItem?.title ?? "请选择一条新闻"}</h2>
