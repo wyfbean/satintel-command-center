@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7f7f4;
+  --foreground: #1f2430;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-strong: #ffffff;
+  --surface-soft: #eef4ff;
+  --border: #e8ebf0;
+  --accent: #3d74ff;
+  --accent-strong: #1f5eff;
+  --highlight: #16a34a;
+  --danger: #f97316;
+  --success: #16a34a;
+  --muted: #6a7282;
+  --shadow: 0 16px 40px rgba(28, 42, 71, 0.08);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-noto-sans-sc);
+  --font-mono: var(--font-ibm-plex-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-noto-sans-sc), sans-serif;
+  background-image:
+    radial-gradient(circle at top, rgba(61, 116, 255, 0.08), transparent 24%),
+    linear-gradient(180deg, #f7f7f4 0%, #f5f6f8 50%, #f7f7f4 100%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(61, 116, 255, 0.18);
+}
+
+.glass-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+
+.panel-grid {
+  position: relative;
+}
+
+.panel-grid::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(61, 116, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(61, 116, 255, 0.05) 1px, transparent 1px);
+  background-size: 36px 36px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.22), transparent);
+  pointer-events: none;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(61, 116, 255, 0.3) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(61, 116, 255, 0.28);
+  border-radius: 999px;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 999px;
+}
+
+.status-dot.live {
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(22, 163, 74, 0.28);
+}
+
+.status-dot.warn {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.28);
+}
