@@ -350,7 +350,7 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
             </div>
           </section>
 
-          <aside className="space-y-5 xl:sticky xl:top-6">
+          <aside className="space-y-5 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto xl:overscroll-contain xl:pr-2 scrollbar-thin">
             <section className="rounded-[28px] border border-[#ebedf2] bg-white p-5 shadow-[0_12px_28px_rgba(28,42,71,0.06)]">
               <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">AI 抓取摘要</div>
               <h2 className="mt-2 text-2xl font-semibold text-slate-900">{selectedItem?.title ?? "请选择一条新闻"}</h2>
