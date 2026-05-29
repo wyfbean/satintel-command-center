@@ -34,6 +34,16 @@
 经纬高有限且高度在 100–50000km 内。当前 12/12 通过：LEO ~500–800km、MEO ~20000km、
 GEO ~35786km（lat≈0）。
 
+## 依赖与构建注意
+
+- **satellite.js 固定 v5（纯 JS SGP4）**。v7 改为 WASM 实现，其入口会 `import "node:worker_threads"`，
+  在浏览器打包时无法解析，并会让 `next build` 的 Turbopack 生产打包**卡死**（dev 因按需编译不受影响）。
+  v5 API 一致（`twoline2satrec`/`propagate`/`gstime`/`eciToGeodetic`/`degreesLat`/`degreesLong`）。
+- 需要 `@types/three` 作为 devDependency。
+- `next.config.ts` 对 `react-globe.gl` / `three-globe` 设置 `transpilePackages`（防御性）。
+- `scripts/` 已从 `tsconfig.json` 的类型检查中排除（`scripts/verify-tle.mts` 用 Node 类型擦除运行，
+  其相对导入带 `.ts` 后缀，不应进入 Next 的 tsc 检查）。
+
 ## 备注
 
 地球贴图与夜空背景来自 unpkg 上的 three-globe 示例纹理（浏览器端按需加载）。若需完全离线，
