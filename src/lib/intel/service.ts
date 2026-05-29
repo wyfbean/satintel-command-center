@@ -1,21 +1,8 @@
+import { runMockBackendIngestion } from "@/lib/backend/mock-backend";
 import { sourceCatalog } from "@/lib/intel/catalog";
-import { MockAdapter } from "@/lib/intel/adapters/mock-adapter";
-import { RssAdapter } from "@/lib/intel/adapters/rss-adapter";
-import { WechatUrlAdapter } from "@/lib/intel/adapters/wechat-adapter";
 import { generateBriefing, enrichItemSummary, isLlmConfigured } from "@/lib/intel/llm";
 import { dedupeAndRank, extractTrendSignals } from "@/lib/intel/scoring";
-import type { DashboardData, IntelItem, IntelSource, RawIntelRecord } from "@/types/intel";
-
-const adapterRegistry = {
-  mock: new MockAdapter(),
-  rss: new RssAdapter(),
-  "wechat-url": new WechatUrlAdapter(),
-};
-
-async function collectFromSource(source: IntelSource) {
-  const adapter = adapterRegistry[source.kind];
-  return adapter.collect(source);
-}
+import type { DashboardData, IntelItem } from "@/types/intel";
 
 function uniqueTags(items: IntelItem[]) {
   return Array.from(new Set(items.flatMap((item) => item.tags))).slice(0, 12);
@@ -57,11 +44,8 @@ function scorecard() {
 }
 
 export async function getDashboardData(): Promise<DashboardData> {
-  const settled = await Promise.allSettled(sourceCatalog.map((source) => collectFromSource(source)));
-  const collected = settled
-    .filter((result): result is PromiseFulfilledResult<RawIntelRecord[]> => result.status === "fulfilled")
-    .flatMap((result) => result.value);
-
+  const ingestion = await runMockBackendIngestion();
+  const collected = ingestion.records;
   const ranked = dedupeAndRank(collected);
   const enriched = await Promise.all(ranked.slice(0, 8).map(enrichItemSummary));
   const items = enriched.concat(ranked.slice(8));

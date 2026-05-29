@@ -21,6 +21,14 @@ export function isLlmConfigured() {
   return Boolean(apiKey);
 }
 
+export function getLlmSettings() {
+  return {
+    configured: isLlmConfigured(),
+    model,
+    baseURL,
+  };
+}
+
 function fallbackBriefing(items: IntelItem[]): BriefingSection[] {
   const top = items.slice(0, 3);
 

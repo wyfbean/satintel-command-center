@@ -15,6 +15,11 @@ export const wechatUrls =
     .map((item) => item.trim())
     .filter(Boolean) ?? [];
 
+export const crawlUrls =
+  process.env.SATINTEL_CRAWL_URLS?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean) ?? wechatUrls;
+
 export const sourceCatalog: IntelSource[] = [
   {
     id: "space-rss-1",
@@ -33,6 +38,15 @@ export const sourceCatalog: IntelSource[] = [
     reliabilityScore: 0.92,
     tags: ["任务", "科研", "EO"],
     url: rssSources[1],
+  },
+  {
+    id: "public-crawl-watchlist",
+    kind: "crawl",
+    name: "公开网页抓取列表",
+    region: "混合",
+    reliabilityScore: 0.76,
+    tags: ["抓取", "产业", "政务"],
+    urls: crawlUrls,
   },
   {
     id: "wechat-watchlist",

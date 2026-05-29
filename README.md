@@ -33,6 +33,7 @@ Optional:
 
 ```bash
 SATINTEL_RSS_SOURCES=https://spacenews.com/feed/,https://www.nasa.gov/rss/dyn/breaking_news.rss
+SATINTEL_CRAWL_URLS=https://example.com/public-article
 ```
 
 Without environment variables, the app still runs with seeded intelligence records and heuristic summaries.
@@ -49,11 +50,13 @@ Open `http://localhost:3000`.
 ## Architecture
 
 - `src/lib/intel/adapters/*`: source-specific collectors.
+- `src/lib/backend/mock-backend.ts`: simulated backend facade for source runs, RSS subscriptions, crawl targets, and LLM state.
 - `src/lib/intel/service.ts`: orchestration, dedupe, ranking, trend extraction.
 - `src/lib/intel/llm.ts`: OpenAI-compatible summary and chat provider abstraction.
 - `src/app/api/*`: feed, briefing, and collaborative chat endpoints.
 - `src/components/dashboard/*`: dashboard UI and collaboration panel.
 - `docs/system-blueprint.md`: design goals, phase plan, and quantized acceptance metrics.
+- `docs/mock-backend.md`: frontend contract analysis plus RSS and crawl backend logic.
 
 ## Notes
 

@@ -76,6 +76,7 @@ function buildTrendKey(record: RawIntelRecord) {
 
 function buildSourceLabel(channel: RawIntelRecord["channel"]) {
   if (channel === "rss") return "RSS";
+  if (channel === "crawl") return "网页抓取";
   if (channel === "wechat-url") return "微信抓取";
   return "AI 抓取";
 }

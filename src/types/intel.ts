@@ -1,4 +1,4 @@
-export type SourceKind = "mock" | "rss" | "wechat-url";
+export type SourceKind = "mock" | "rss" | "crawl" | "wechat-url";
 
 export type IntelSource = {
   id: string;
@@ -85,4 +85,42 @@ export type DashboardData = {
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+};
+
+export type SourceRunStatus = "fulfilled" | "failed" | "skipped";
+
+export type SourceRunReport = {
+  sourceId: string;
+  sourceName: string;
+  kind: SourceKind;
+  status: SourceRunStatus;
+  itemCount: number;
+  elapsedMs: number;
+  message?: string;
+};
+
+export type BackendOverview = {
+  generatedAt: string;
+  mode: "mock-backend";
+  contracts: {
+    feed: string;
+    briefing: string;
+    chat: string;
+  };
+  llm: {
+    provider: "openai-compatible";
+    configured: boolean;
+    model: string;
+    baseURL?: string;
+  };
+  rss: {
+    sourceCount: number;
+    urls: string[];
+    spec: string[];
+  };
+  crawl: {
+    targetCount: number;
+    urls: string[];
+    policy: string[];
+  };
 };
