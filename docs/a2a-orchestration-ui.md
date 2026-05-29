@@ -18,11 +18,31 @@ This UI adds a dedicated `/orchestration` page for visualizing an A2A-style mult
 - A2A streaming documentation: models low-latency task updates through stream events and uses `tasks/get` for recovery.
 - A2A core specification notes: separates `Message` as interaction payload from `Artifact` as output payload.
 
-## Integration path
+## Current implementation: AG-UI + CopilotKit (rebuilt)
 
-The current page uses `src/lib/mock/a2a-orchestration.ts`. To attach a real A2A host:
+The static page has been replaced by an AG-UI conversational view (CopilotKit). The flow:
 
-1. Add a route such as `GET /api/a2a/runs/:id` for the durable task snapshot.
-2. Add a streaming route that proxies `message/stream` or `tasks/subscribe` events into the event timeline.
-3. Validate AgentCard, message, and artifact schemas server-side before exposing them to the UI or LLM context.
-4. Keep the news page contract unchanged: `/api/feed`, `/api/briefing`, and `/api/chat` continue to serve the existing dashboard.
+- `OrchestrationMockAgent` (`src/lib/a2a/orchestration-agent.ts`) replays
+  `src/lib/mock/a2a-orchestration.ts` as a spec-compliant AG-UI event stream
+  (`RUN_STARTED → STEP/TEXT_MESSAGE/TOOL_CALL/STATE_SNAPSHOT → RUN_FINISHED`).
+- It is registered in `CopilotRuntime` at `src/app/api/copilotkit/route.ts` and bound on the
+  page via `<CopilotKit agent="orchestration">`.
+- `src/components/orchestration/orchestration-shell.tsx` renders three channels:
+  `TEXT_MESSAGE_*` → chat bubbles, `TOOL_CALL_*` → A2A state-call cards
+  (`useCopilotAction` catch-all), `STATE_SNAPSHOT` → `useCoAgent` state panels.
+
+See [copilotkit-dashboard.md](copilotkit-dashboard.md) for the shared runtime details.
+
+## Integration path (mock → real A2A host)
+
+**The single swap point is `OrchestrationMockAgent`.** To attach a real A2A host:
+
+1. Replace the replay agent with `@ag-ui/a2a-middleware` (a bridge that wraps an A2A
+   endpoint and emits AG-UI events), or an `HttpAgent` pointing at an AG-UI proxy.
+2. The proxy translates A2A `message/stream` / `tasks/subscribe` into AG-UI events and uses
+   `tasks/get` for recovery snapshots.
+3. Validate AgentCard, message, and artifact schemas server-side before exposing them to the
+   UI or LLM context.
+4. Keep the news page contract unchanged: `/api/feed`, `/api/briefing`, and `/api/chat`
+   continue to serve the existing dashboard. The UI (event shapes, `useCoAgent` state) does
+   not change when the mock agent is swapped for the real bridge.
