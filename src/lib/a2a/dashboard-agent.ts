@@ -32,22 +32,40 @@ export class SatelliteDashboardAgent extends AbstractAgent {
         emit({ type: EventType.STATE_SNAPSHOT, snapshot: toDashboardSnapshot(dashboard) } as BaseEvent);
 
         const messages = extractChatMessages(input);
-        const hasQuestion = messages.some((message) => message.role === "user");
+        const latestUser = [...messages].reverse().find((message) => message.role === "user");
+
+        // If the user names a source and the page exposed a `filterBySource`
+        // frontend action, drive it — a real CopilotKit frontend-action loop.
+        if (latestUser) {
+          const source = matchSource(dashboard, latestUser.content);
+          const hasFilterTool = (input.tools ?? []).some((tool) => tool.name === "filterBySource");
+          if (source && hasFilterTool) {
+            const toolCallId = `call-filter-${runId}`;
+            emit({ type: EventType.TOOL_CALL_START, toolCallId, toolCallName: "filterBySource" } as BaseEvent);
+            emit({ type: EventType.TOOL_CALL_ARGS, toolCallId, delta: JSON.stringify({ source }) } as BaseEvent);
+            emit({ type: EventType.TOOL_CALL_END, toolCallId } as BaseEvent);
+          }
+        }
 
         const messageId = `msg-${runId}`;
         emit({ type: EventType.TEXT_MESSAGE_START, messageId, role: "assistant" } as BaseEvent);
 
-        if (!hasQuestion) {
+        if (!latestUser) {
           emit({
             type: EventType.TEXT_MESSAGE_CONTENT,
             messageId,
             delta: buildWelcome(dashboard),
           } as BaseEvent);
         } else {
+          // Frontend `useCopilotReadable` context grounds the answer in what the
+          // operator currently sees (active filter, selected item).
+          const frontendContext = (input.context ?? [])
+            .map((entry) => `${entry.description}: ${entry.value}`)
+            .join("\n");
           const answer = await generateChatAnswer({
             messages,
             contextItems: dashboard.items.slice(0, 5),
-            missionContext: "卫星情报对话面板",
+            missionContext: `卫星情报对话面板${frontendContext ? `\n界面上下文：\n${frontendContext}` : ""}`,
           });
           emit({ type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: answer } as BaseEvent);
         }
@@ -95,6 +113,12 @@ function buildWelcome(dashboard: DashboardData): string {
     `当前资讯流共 ${dashboard.items.length} 条信号，优先级最高的是：${top.join("、")}。`,
     "你可以问我某个来源、地区或主题的动态，我会基于当前资讯流回答。",
   ].join("\n");
+}
+
+/** Find a feed source name mentioned in the user's message, if any. */
+function matchSource(dashboard: DashboardData, text: string): string | null {
+  const names = Array.from(new Set(dashboard.items.map((item) => item.sourceName)));
+  return names.find((name) => name && text.includes(name)) ?? null;
 }
 
 function extractChatMessages(input: RunAgentInput): ChatMessage[] {
