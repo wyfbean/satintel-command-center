@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import { ChatPanel } from "@/components/dashboard/chat-panel";
@@ -166,10 +167,15 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
               <span>RSS 源</span>
               <span>AI 抓取</span>
               <span>Ask AI</span>
+              <Link href="/orchestration" className="transition hover:text-slate-900">
+                Agent 编排
+              </Link>
               <span>中文</span>
             </nav>
 
-            <button className="rounded-full bg-[#111111] px-5 py-3 text-sm font-medium text-white">添加订阅源</button>
+            <Link href="/orchestration" className="rounded-full bg-[#111111] px-5 py-3 text-sm font-medium text-white">
+              查看 A2A 流程
+            </Link>
           </div>
 
           <section className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
