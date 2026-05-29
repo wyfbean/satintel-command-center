@@ -32,10 +32,16 @@ NEXT_PUBLIC_FEED_MODE=mock          # force dashboard to render frontendMockDash
 
 ## Architecture
 
-Next.js 16 App Router (React 19, Tailwind v4). Two top-level pages share one backend:
+Next.js 16 App Router (React 19, Tailwind v4). Four pages share one backend:
 
 - `/` → `DashboardShell` (Chinese news feed + Ask AI), data from `getDashboardData()`.
-- `/orchestration` → `OrchestrationShell` (A2A multi-agent visualization), data from `src/lib/mock/a2a-orchestration.ts`.
+- `/orchestration` → `OrchestrationShell` — AG-UI conversational view of the A2A run (CopilotKit), driven by `OrchestrationMockAgent` replaying `src/lib/mock/a2a-orchestration.ts`.
+- `/dashboard` → `DashboardCopilotShell` — CopilotKit conversational dashboard over the feed, driven by `SatelliteDashboardAgent`.
+- `/globe` → `GlobeShell` — 3D flagship-satellite map (react-globe.gl + satellite.js), data from `src/lib/satellites/catalog.ts`.
+
+### AG-UI / CopilotKit layer (`src/lib/a2a/`, `src/app/api/copilotkit/`)
+
+`/orchestration` and `/dashboard` share the CopilotKit runtime at `src/app/api/copilotkit/route.ts`. Agents are in-process AG-UI `AbstractAgent`s registered in `CopilotRuntime({ agents })`; the serviceAdapter is `ExperimentalEmptyAdapter` (agents emit their own events, so **no LLM key is needed at the runtime level** — keep this invariant). Bind a page to an agent via `<CopilotKit agent="orchestration|satellite_dashboard">`. The A2A→AG-UI bridge (`OrchestrationMockAgent`) is the single swap point for a real A2A host — see `docs/a2a-orchestration-ui.md`. `SatelliteDashboardAgent` reuses `getDashboardData` + `generateChatAnswer` (preserving the deterministic fallback).
 
 ### Ingestion pipeline (`src/lib/intel/`)
 
