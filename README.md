@@ -8,8 +8,8 @@ A2A multi-agent layer surfaced through AG-UI / CopilotKit, plus a 3D satellite g
 | Route | Purpose |
 |-------|---------|
 | `/` | Chinese satellite news feed + Ask AI (unchanged contract) |
-| `/orchestration` | AG-UI conversational view of the A2A multi-agent run (CopilotKit) |
-| `/dashboard` | CopilotKit conversational dashboard over the live feed |
+| `/orchestration` | ChatGPT-style chat for a CrewAI multi-agent backend; MCP/A2A tool-call results + satellite-image VQA/segmentation render inline |
+| `/dashboard` | CopilotKit conversational dashboard (chat right, data left) |
 | `/globe` | 3D Earth map of each country's flagship satellites |
 
 ## What it does
@@ -27,6 +27,7 @@ A2A multi-agent layer surfaced through AG-UI / CopilotKit, plus a 3D satellite g
 - `OpenAI SDK compatible provider`
 - `@copilotkit/*` + `@ag-ui/*` (AG-UI protocol, agent ↔ user)
 - `react-globe.gl` + `three` + `satellite.js` (3D globe + orbit propagation)
+- `backend/`: Python FastAPI + **CrewAI** (+ `crewai-tools[mcp]`) multi-agent service over AG-UI
 
 ## Environment
 
@@ -52,10 +53,15 @@ Without environment variables, the app still runs with seeded intelligence recor
 
 ```bash
 npm install
-npm run dev
+npm run dev          # http://localhost:3000
+
+# /orchestration also needs the CrewAI agent backend (separate process):
+cd backend && uv sync
+uv run uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`. The backend runs in mock mode with zero env vars; see
+`docs/agent-backend-crewai.md`.
 
 ## Architecture
 

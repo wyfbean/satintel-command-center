@@ -1,6 +1,11 @@
 # A2A orchestration UI
 
-This UI adds a dedicated `/orchestration` page for visualizing an A2A-style multi-agent run without changing the existing news/feed contract.
+> **Superseded.** `/orchestration` has been rebuilt as a ChatGPT-style chat for a CrewAI
+> multi-agent backend (MCP/A2A tool-call results rendered inline) — see
+> [agent-backend-crewai.md](agent-backend-crewai.md). This document is retained for the original
+> AG-UI design rationale and the A2A integration notes below.
+
+This UI originally added a dedicated `/orchestration` page for visualizing an A2A-style multi-agent run without changing the existing news/feed contract.
 
 ## UI scheme
 

@@ -118,3 +118,29 @@ filterBySource 工具调用均在 SSE 流中确认。
 验证结果（真机）：`/orchestration` 自动回放——对话气泡 + 9 张 A2A 状态调用卡片 +
 左侧状态面板（5 个 agent、artifact、指标）全部呈现；`/dashboard` 面板 17 条，输入
 “筛选 SpaceNews 订阅源”后列表收敛为 6；`/globe` WebGL 画布出图、12 颗卫星、点击出详情。
+
+## 第二轮重定向：ChatGPT 式 CrewAI 多智能体对话 + 共享导航 + 数据面板通用化
+
+用户澄清：`/orchestration` 不要侧栏 widget，要 ChatGPT/OpenWebUI/DevUI 式单窗对话，
+后端是支持多模态卫星图像 VQA/分割的**真实多智能体框架**，协作流程在对话窗内渲染；
+聊天需通用渲染 **MCP/A2A 工具调用结果**（“分割”只是其一）；**复用现成方案并遵循官方指南**。
+确认：FastAPI + **CrewAI** 真实后端、复用 **CopilotKit + AG-UI**、含图像上传与工具结果。
+
+- **Phase A**：新增 `SiteNav` 全站共用导航（light/dark 变体，按路由高亮）；`/dashboard`
+  文案去新闻化（数据流/数据源/概要…），聊天右/数据左布局不变。
+- **Phase B**：`backend/`（uv 管理）CrewAI + AG-UI 服务，`POST /agent` 流式 AG-UI 事件。
+  `agui.py` 桥接：有 `OPENAI_API_KEY` 跑真实 crew（多模态影像分析师 + 报告员 + 经
+  `MCPServerAdapter` 接入自带卫星 MCP 工具），否则确定性 mock（仍调真实工具实现，零环境变量可用）。
+  自带 stdio MCP 服务 `mcp_server/server.py` 暴露 segment_image/detect_objects/tle_lookup/geo_locate。
+  遵循官方：CopilotKit↔CrewAI(AG-UI)、CrewAI MCPServerAdapter、ag-ui Python SDK（`ag_ui.encoder.EventEncoder`）。
+- **Phase C**：`/orchestration` 重建为全窗 `CopilotChat`，经 `HttpAgent` 绑定后端；
+  `useCopilotAction({name:"*"})` 内联渲染工具卡片，分割结果在所附图像上叠加 SVG 区域；
+  图像经 `useCopilotReadable` 以 AG-UI context 传后端。删除旧 `OrchestrationMockAgent`。
+
+后端踩坑：satellite.js 无关；本轮 `agui._attached_image` 需识别 CopilotKit 把空读值
+JSON 序列化为 `'""'` 的情况，仅接受真实 `data:`/`http` 图像值，避免文本问询误走影像工具。
+
+真机验证（Playwright `scripts/verify-agent.mjs`，后端 mock 模式）：`/orchestration` 单列全窗、
+无侧栏；文本问询→`geo_locate`/`tle_lookup` 工具卡片 + 协调员/影像/报告员对话；附加真实图像→
+`detect_objects`/`segment_image` 卡片 + 分割叠加（7 个区域框）。`npm run build`/`lint(0 error)` 通过。
+注：`/` 首页静态构建因 `.env.local` 实时 LLM 富集 >60s（首试超时、重试通过），与本轮改动无关。
