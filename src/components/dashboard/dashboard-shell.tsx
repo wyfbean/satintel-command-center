@@ -9,9 +9,11 @@ import { FeedCard } from "@/components/dashboard/feed-card";
 import { frontendMockDashboardData } from "@/lib/mock/frontend-dashboard";
 import type { BriefingSection, DashboardData } from "@/types/intel";
 
+/* ── small utils ───────────────────────────────────────────────────── */
+
 function RssIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
       <path d="M4 11a9 9 0 0 1 9 9" /><path d="M4 4a16 16 0 0 1 16 16" />
       <circle cx="5" cy="19" r="1" fill="currentColor" />
     </svg>
@@ -28,11 +30,21 @@ function formatDateTime(isoString: string) {
   }).format(new Date(isoString));
 }
 
-type DashboardShellProps = {
-  initialData: DashboardData;
-};
+function todayParts() {
+  const now = new Date();
+  const day = now.getDate();
+  const weekdays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
+  const weekday = weekdays[now.getDay()];
+  const month = now.getMonth() + 1;
+  return { day, month, weekday };
+}
 
+/* ── types ─────────────────────────────────────────────────────────── */
+
+type DashboardShellProps = { initialData: DashboardData };
 const useFrontendMock = process.env.NEXT_PUBLIC_FEED_MODE === "mock";
+
+/* ── main component ─────────────────────────────────────────────────── */
 
 export function DashboardShell({ initialData }: DashboardShellProps) {
   const bootData = useFrontendMock ? frontendMockDashboardData : initialData;
@@ -49,87 +61,56 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
   const [rssOpen, setRssOpen] = useState(false);
 
   const filteredItems = useMemo(() => {
-    const normalizedQuery = deferredQuery.trim().toLowerCase();
-
+    const q = deferredQuery.trim().toLowerCase();
     return data.items.filter((item) => {
       const matchesSource = sourceFilter === "全部" || item.sourceName === sourceFilter;
       const matchesQuery =
-        normalizedQuery.length === 0 ||
-        `${item.title} ${item.summary} ${item.tags.join(" ")}`.toLowerCase().includes(normalizedQuery);
-
+        q.length === 0 ||
+        `${item.title} ${item.summary} ${item.tags.join(" ")}`.toLowerCase().includes(q);
       return matchesSource && matchesQuery;
     });
   }, [data.items, deferredQuery, sourceFilter]);
 
-  const selectedItem = filteredItems.find((item) => item.id === selectedId) ?? filteredItems[0] ?? data.items[0];
-  const activeIndex = Math.max(
-    0,
-    filteredItems.findIndex((item) => item.id === selectedItem?.id),
-  );
+  const selectedItem = filteredItems.find((i) => i.id === selectedId) ?? filteredItems[0] ?? data.items[0];
+  const activeIndex = Math.max(0, filteredItems.findIndex((i) => i.id === selectedItem?.id));
   const visibleDateLabels = ["现在", data.dateTitle.slice(5), "5.22", "5.21", "5.20"];
+  const { day, month, weekday } = todayParts();
 
+  /* scroll tracking */
   useEffect(() => {
-    const handleScroll = () => {
+    const handle = () => {
       const scrollable = document.documentElement.scrollHeight - window.innerHeight;
-      const nextProgress = scrollable <= 0 ? 0 : Math.min(1, Math.max(0, window.scrollY / scrollable));
-      const viewportAnchor = Math.min(window.innerHeight * 0.38, 280);
+      const progress = scrollable <= 0 ? 0 : Math.min(1, Math.max(0, window.scrollY / scrollable));
+      const anchor = Math.min(window.innerHeight * 0.38, 280);
       const nearest = filteredItems
         .map((item) => {
-          const node = feedNodeMap.current.get(item.id);
-          const rect = node?.getBoundingClientRect();
-
-          return {
-            id: item.id,
-            distance: rect ? Math.abs(rect.top - viewportAnchor) : Number.POSITIVE_INFINITY,
-          };
+          const rect = feedNodeMap.current.get(item.id)?.getBoundingClientRect();
+          return { id: item.id, distance: rect ? Math.abs(rect.top - anchor) : Infinity };
         })
-        .sort((left, right) => left.distance - right.distance)[0];
-
-      setScrollProgress(nextProgress);
-
-      if (nearest?.id) {
-        setSelectedId((current) => (current === nearest.id ? current : nearest.id));
-      }
+        .sort((a, b) => a.distance - b.distance)[0];
+      setScrollProgress(progress);
+      if (nearest?.id) setSelectedId((cur) => cur === nearest.id ? cur : nearest.id);
     };
-    const scheduleScrollUpdate = () => {
-      if (scrollFrameRef.current !== null) {
-        return;
-      }
-
-      scrollFrameRef.current = window.requestAnimationFrame(() => {
-        scrollFrameRef.current = null;
-        handleScroll();
-      });
+    const schedule = () => {
+      if (scrollFrameRef.current !== null) return;
+      scrollFrameRef.current = window.requestAnimationFrame(() => { scrollFrameRef.current = null; handle(); });
     };
-
-    scheduleScrollUpdate();
-    window.addEventListener("scroll", scheduleScrollUpdate, { passive: true });
-
+    schedule();
+    window.addEventListener("scroll", schedule, { passive: true });
     return () => {
-      window.removeEventListener("scroll", scheduleScrollUpdate);
-
-      if (scrollFrameRef.current !== null) {
-        window.cancelAnimationFrame(scrollFrameRef.current);
-        scrollFrameRef.current = null;
-      }
+      window.removeEventListener("scroll", schedule);
+      if (scrollFrameRef.current !== null) { window.cancelAnimationFrame(scrollFrameRef.current); scrollFrameRef.current = null; }
     };
   }, [filteredItems]);
 
   function registerFeedNode(id: string, node: HTMLElement | null) {
-    if (node) {
-      feedNodeMap.current.set(id, node);
-      return;
-    }
-
-    feedNodeMap.current.delete(id);
+    if (node) feedNodeMap.current.set(id, node);
+    else feedNodeMap.current.delete(id);
   }
 
   function scrollToItem(id: string) {
     setSelectedId(id);
-    feedNodeMap.current.get(id)?.scrollIntoView({
-      block: "center",
-      behavior: "smooth",
-    });
+    feedNodeMap.current.get(id)?.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 
   async function refreshFeed() {
@@ -139,29 +120,26 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
       setSelectedId(frontendMockDashboardData.items[0]?.id ?? "");
       return;
     }
-
-    const response = await fetch("/api/feed");
-    const nextData = (await response.json()) as DashboardData;
-    setData(nextData);
-    setBriefing(nextData.briefing);
-    setSelectedId(nextData.items[0]?.id ?? "");
+    const r = await fetch("/api/feed");
+    const d = (await r.json()) as DashboardData;
+    setData(d); setBriefing(d.briefing); setSelectedId(d.items[0]?.id ?? "");
   }
 
   async function refreshBriefing() {
-    if (useFrontendMock) {
-      setBriefing(frontendMockDashboardData.briefing);
-      return;
-    }
-
-    const response = await fetch("/api/briefing");
-    const payload = (await response.json()) as { briefing: BriefingSection[] };
-    setBriefing(payload.briefing);
+    if (useFrontendMock) { setBriefing(frontendMockDashboardData.briefing); return; }
+    const r = await fetch("/api/briefing");
+    const p = (await r.json()) as { briefing: BriefingSection[] };
+    setBriefing(p.briefing);
   }
+
+  /* ── render ──────────────────────────────────────────────────────── */
 
   return (
     <main className="panel-grid min-h-screen px-4 py-6 text-slate-900 sm:px-6 lg:px-8">
-      <div className="mx-auto flex w-full max-w-[1520px] flex-col gap-8">
-        <header className="flex flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-[1520px] flex-col gap-6">
+
+        {/* ── top navbar ── */}
+        <header>
           <div className="mx-auto flex w-full max-w-[980px] items-center justify-between rounded-full border border-[#ebedf2] bg-white px-5 py-4 shadow-[0_14px_36px_rgba(28,42,71,0.08)]">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#1f2430] text-sm font-semibold text-white">
@@ -172,81 +150,109 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
                 <div className="text-xs text-slate-400">Orbit Intelligence Feed</div>
               </div>
             </div>
-
             <SiteNav />
           </div>
-
-          <section className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
-            <aside className="rounded-[34px] border border-[#d8e3ff] bg-[linear-gradient(180deg,#ffffff_0%,#f3f7ff_100%)] p-6 shadow-[0_18px_36px_rgba(61,116,255,0.08)]">
-              <div className="text-xs font-medium uppercase tracking-[0.24em] text-[#3d74ff]">日期索引</div>
-              <div className="mt-6 text-[68px] font-semibold leading-none text-[#3d74ff]">23</div>
-              <div className="mt-3 text-3xl font-semibold text-slate-900">5 月 星期六</div>
-              <p className="mt-4 text-sm leading-7 text-slate-500">
-                以时间线方式展示卫星、遥感、微信行业信号，支持 RSS 扩展与 AI 抓取补充。
-              </p>
-              <div className="mt-8 rounded-[28px] bg-[#111827] px-5 py-6 text-white">
-                <div className="text-sm font-medium text-white/70">今日主轴</div>
-                <div className="mt-3 text-2xl font-semibold leading-9">高频成像、政务采购、星座部署</div>
-              </div>
-            </aside>
-
-            <section className="pt-2">
-              <div className="flex flex-col gap-4">
-                <div className="flex items-center gap-3">
-                  <span className="status-dot live" />
-                  <span className="rounded-full bg-[#eefbf1] px-3 py-1 text-sm text-[#15803d]">实时更新</span>
-                  <span className="text-sm text-slate-400">最新编译于 {formatDateTime(data.generatedAt)}</span>
-                </div>
-                <div className="max-w-4xl">
-                  <div className="text-sm font-medium text-slate-400">{data.hero.eyebrow}</div>
-                  <h1 className="mt-3 text-5xl font-semibold tracking-tight text-slate-900 md:text-6xl">
-                    {data.hero.title}
-                  </h1>
-                  <p className="mt-4 text-[17px] leading-8 text-slate-500">{data.hero.description}</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
-                  <span>已聚合 {data.sourceSummary.totalItems} 条资讯</span>
-                  <span>活跃源 {data.sourceSummary.liveSources}</span>
-                  <span>来源总数 {data.sourceSummary.totalSources}</span>
-                  <span>{data.sourceSummary.llmConfigured ? "LLM 已接入" : "当前使用本地回退摘要"}</span>
-                  <button
-                    type="button"
-                    onClick={() => setRssOpen(true)}
-                    className="flex items-center gap-1.5 rounded-full border border-[#d8e3ff] bg-[#f4f7ff] px-3 py-1 text-xs font-medium text-[#3d74ff] hover:bg-[#e8f0ff] transition"
-                  >
-                    <RssIcon />
-                    管理 RSS 订阅
-                  </button>
-                </div>
-                <RssManager
-                  open={rssOpen}
-                  onClose={() => setRssOpen(false)}
-                  onChanged={() => { void refreshFeed(); }}
-                />
-              </div>
-            </section>
-
-            <aside className="rounded-[28px] border border-[#ebedf2] bg-white p-5 shadow-[0_14px_34px_rgba(28,42,71,0.06)]">
-              <div className="grid grid-cols-2 gap-2 rounded-full bg-[#f4f5f7] p-1 text-sm">
-                <div className="rounded-full bg-white px-4 py-2 text-center font-medium text-slate-900 shadow-sm">
-                  我是 Agent
-                </div>
-                <div className="rounded-full px-4 py-2 text-center text-slate-400">我是分析师</div>
-              </div>
-              <div className="mt-4 rounded-[22px] bg-[#f8f9fb] p-4">
-                <div className="text-sm font-medium text-slate-700">发送给你的 Agent</div>
-                <p className="mt-2 text-sm leading-7 text-slate-500">
-                  让它自动读取源、做摘要，并对当前日期的信息流建立上下文。
-                </p>
-                <div className="mt-3 rounded-[18px] border border-[#e8ebf0] bg-white px-4 py-3 font-mono text-xs text-[#3d74ff]">
-                  Read /feeds/SKILL.md · parse rss · summarize news · ask follow-up
-                </div>
-              </div>
-            </aside>
-          </section>
         </header>
 
+        {/* ── unified top widget: date + AI briefing + agent ── */}
+        <section className="grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)_300px]">
+
+          {/* left: date index */}
+          <div className="rounded-[34px] border border-[#d8e3ff] bg-[linear-gradient(180deg,#ffffff_0%,#f3f7ff_100%)] p-6 shadow-[0_18px_36px_rgba(61,116,255,0.08)] flex flex-col">
+            <div className="text-xs font-medium uppercase tracking-[0.24em] text-[#3d74ff]">日期索引</div>
+            <div className="mt-4 text-[68px] font-semibold leading-none text-[#3d74ff]">{day}</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">{month} 月 {weekday}</div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <span className="flex items-center gap-1">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#22c55e]" />
+                最新 {formatDateTime(data.generatedAt)}
+              </span>
+              <span>共 {data.sourceSummary.totalItems} 条</span>
+            </div>
+            <div className="mt-auto pt-5 rounded-[24px] bg-[#111827] px-5 py-5 text-white">
+              <div className="text-xs font-medium text-white/60">今日主轴</div>
+              <div className="mt-2 text-lg font-semibold leading-7">
+                {data.trends.slice(0, 3).map((t) => t.label).join("、") || "高频成像、政务采购、星座部署"}
+              </div>
+              <button
+                type="button"
+                onClick={() => setRssOpen(true)}
+                className="mt-4 flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white/80 hover:bg-white/20 transition"
+              >
+                <RssIcon />
+                管理 RSS 订阅
+              </button>
+            </div>
+            <RssManager open={rssOpen} onClose={() => setRssOpen(false)} onChanged={() => void refreshFeed()} />
+          </div>
+
+          {/* middle: today's AI briefing */}
+          <div className="rounded-[34px] border border-[#ebedf2] bg-white p-6 shadow-[0_14px_34px_rgba(28,42,71,0.06)]">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">今日 AI 速览</div>
+                <h2 className="mt-1.5 text-xl font-semibold text-slate-900">聚合摘要</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => startTransition(() => void refreshBriefing())}
+                className="shrink-0 rounded-full border border-[#e8ebf0] px-3 py-1.5 text-xs text-slate-600 hover:bg-[#f8fafc] transition"
+              >
+                重新生成
+              </button>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {briefing.length > 0 ? (
+                briefing.map((section) => (
+                  <div key={section.heading} className="rounded-[20px] bg-[#f7f9ff] px-4 py-4">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#3d74ff]">
+                      {section.heading}
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">{section.body}</p>
+                  </div>
+                ))
+              ) : (
+                <div className="col-span-3 rounded-[20px] bg-[#f7f9ff] px-4 py-6 text-center text-sm text-slate-400">
+                  正在生成 AI 速览……
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* right: simplified agent widget */}
+          <div className="rounded-[34px] border border-[#ebedf2] bg-white p-6 shadow-[0_14px_34px_rgba(28,42,71,0.06)] flex flex-col">
+            <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">智能体</div>
+            <h3 className="mt-1.5 text-lg font-semibold text-slate-900">发送给你的 Agent</h3>
+            <p className="mt-3 text-sm leading-7 text-slate-500">
+              让它自动读取源、做摘要，并对当前日期的信息流建立上下文。
+            </p>
+            <div className="mt-4 rounded-[18px] border border-[#e8ebf0] bg-[#f8f9fb] px-4 py-3 font-mono text-xs text-[#3d74ff] leading-6">
+              Read /feeds/SKILL.md · parse rss · summarize news · ask follow-up
+            </div>
+            <div className="mt-auto pt-5">
+              <div className="grid grid-cols-2 gap-2 text-xs text-slate-500">
+                <div className="rounded-[14px] bg-[#f7f9ff] px-3 py-2.5">
+                  <div className="font-semibold text-[#3d74ff]">{data.sourceSummary.totalSources}</div>
+                  <div className="mt-0.5">来源总数</div>
+                </div>
+                <div className="rounded-[14px] bg-[#f0fdf4] px-3 py-2.5">
+                  <div className="font-semibold text-[#15803d]">{data.sourceSummary.liveSources}</div>
+                  <div className="mt-0.5">活跃源</div>
+                </div>
+                <div className="col-span-2 rounded-[14px] bg-[#f8fafc] px-3 py-2.5">
+                  <span className={data.sourceSummary.llmConfigured ? "text-[#15803d]" : "text-amber-600"}>
+                    {data.sourceSummary.llmConfigured ? "✓ LLM 已接入" : "⚠ 演示模式"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ── feed section (3-column) ── */}
         <section className="grid items-start gap-8 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+
+          {/* left sidebar */}
           <aside className="space-y-4 xl:sticky xl:top-6">
             <div className="rounded-[28px] border border-[#ebedf2] bg-white p-5">
               <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">来源过滤</div>
@@ -286,11 +292,7 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
                     <button
                       key={label}
                       type="button"
-                      onClick={() => {
-                        if (index === 0 || index === 1) {
-                          scrollToItem(filteredItems[0]?.id ?? "");
-                        }
-                      }}
+                      onClick={() => { if (index < 2) scrollToItem(filteredItems[0]?.id ?? ""); }}
                       className={`block text-left font-mono ${
                         index < 2 ? "text-2xl font-semibold text-[#3d74ff]" : "text-lg text-slate-300"
                       }`}
@@ -318,6 +320,7 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
             </div>
           </aside>
 
+          {/* feed */}
           <section className="min-w-0">
             <div className="rounded-[32px] border border-[#ebedf2] bg-white p-6 shadow-[0_12px_30px_rgba(28,42,71,0.06)]">
               <div className="flex flex-col gap-4 border-b border-[#eff1f4] pb-5 lg:flex-row lg:items-center lg:justify-between">
@@ -328,7 +331,7 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
                 <div className="flex flex-wrap gap-3">
                   <input
                     value={query}
-                    onChange={(event) => setQuery(event.target.value)}
+                    onChange={(e) => setQuery(e.target.value)}
                     placeholder="搜索标题、主题或摘要"
                     className="w-full rounded-full border border-[#e8ebf0] bg-[#fafbfc] px-4 py-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 lg:w-72"
                   />
@@ -341,7 +344,6 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
                   </button>
                 </div>
               </div>
-
               <div className="mt-6 space-y-6 pr-2">
                 {filteredItems.map((item) => (
                   <FeedCard
@@ -352,15 +354,16 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
                     registerNode={registerFeedNode}
                   />
                 ))}
-                {filteredItems.length === 0 ? (
+                {filteredItems.length === 0 && (
                   <div className="rounded-[24px] border border-dashed border-[#d9deea] p-8 text-center text-sm text-slate-400">
                     没有匹配当前筛选条件的资讯。
                   </div>
-                ) : null}
+                )}
               </div>
             </div>
           </section>
 
+          {/* right: article detail + chat (今日AI速览 removed — now in top widget) */}
           <aside className="space-y-5 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto xl:overscroll-contain xl:pr-2 scrollbar-thin">
             <section className="rounded-[28px] border border-[#ebedf2] bg-white p-5 shadow-[0_12px_28px_rgba(28,42,71,0.06)]">
               <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">AI 抓取摘要</div>
@@ -391,34 +394,10 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
               </a>
             </section>
 
-            <section className="rounded-[28px] border border-[#ebedf2] bg-white p-5 shadow-[0_12px_28px_rgba(28,42,71,0.06)]">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">今日 AI 速览</div>
-                  <h3 className="mt-2 text-2xl font-semibold text-slate-900">聚合摘要</h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => startTransition(() => void refreshBriefing())}
-                  className="rounded-full border border-[#e8ebf0] px-3 py-2 text-sm text-slate-600"
-                >
-                  重新生成
-                </button>
-              </div>
-
-              <div className="mt-4 space-y-4">
-                {briefing.map((section) => (
-                  <div key={section.heading} className="rounded-[22px] bg-[#fafbfc] px-4 py-4">
-                    <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">{section.heading}</div>
-                    <p className="mt-2 text-sm leading-7 text-slate-600">{section.body}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-
             <ChatPanel selectedItems={selectedItem ? [selectedItem] : filteredItems.slice(0, 1)} />
           </aside>
         </section>
+
       </div>
     </main>
   );
