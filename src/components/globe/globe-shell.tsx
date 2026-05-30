@@ -1,11 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import * as satellite from "satellite.js";
 
+import { SiteNav } from "@/components/site-nav";
 import { satelliteCatalog, satelliteCountries, type FlagshipSatellite } from "@/lib/satellites/catalog";
 
 // react-globe.gl touches window/WebGL — load it only in the browser.
@@ -89,18 +89,7 @@ export function GlobeShell() {
               <div className="text-sm font-semibold text-white">各国旗舰卫星 · 3D 星图</div>
               <div className="text-xs text-slate-400">react-globe.gl · satellite.js SGP4 实时轨道推演</div>
             </div>
-            <nav className="flex flex-wrap items-center gap-3 text-sm">
-              <Link href="/" className="rounded-full border border-white/15 px-4 py-2 text-slate-300 hover:bg-white/5">
-                资讯流
-              </Link>
-              <Link href="/orchestration" className="rounded-full border border-white/15 px-4 py-2 text-slate-300 hover:bg-white/5">
-                Agent 编排
-              </Link>
-              <Link href="/dashboard" className="rounded-full border border-white/15 px-4 py-2 text-slate-300 hover:bg-white/5">
-                对话面板
-              </Link>
-              <span className="rounded-full bg-white px-4 py-2 font-medium text-[#05070f]">3D 星图</span>
-            </nav>
+            <SiteNav variant="dark" />
           </div>
         </header>
 

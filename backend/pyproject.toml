@@ -1,0 +1,15 @@
+[project]
+name = "satintel-agents"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "ag-ui-protocol>=0.1.18",
+    "crewai>=1.14.6",
+    "crewai-tools[mcp]>=1.14.6",
+    "fastapi>=0.136.3",
+    "mcp>=1.26.0",
+    "python-multipart>=0.0.29",
+    "uvicorn[standard]>=0.48.0",
+]

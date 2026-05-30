@@ -2,11 +2,11 @@
 
 import "@copilotkit/react-ui/styles.css";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { CopilotKit, useCopilotAction, useCopilotReadable } from "@copilotkit/react-core";
 import { CopilotChat } from "@copilotkit/react-ui";
 
+import { SiteNav } from "@/components/site-nav";
 import type { DashboardData } from "@/types/intel";
 
 const AGENT_NAME = "satellite_dashboard";
@@ -76,9 +76,9 @@ function DashboardCopilotWorkspace() {
 
   // Expose what the operator currently sees so chat answers stay grounded in it.
   useCopilotReadable({
-    description: "卫星情报对话面板当前界面状态",
+    description: "卫星数据对话面板当前界面状态",
     value: {
-      activeSourceFilter: activeSource ?? "全部来源",
+      activeSourceFilter: activeSource ?? "全部数据源",
       visibleCount: visibleItems.length,
       visibleTitles: visibleItems.slice(0, 6).map((item) => item.title),
       trends: state.trends.map((trend) => `${trend.label}(${trend.count})`),
@@ -95,29 +95,18 @@ function DashboardCopilotWorkspace() {
                 A2UI
               </div>
               <div>
-                <div className="text-sm font-semibold text-slate-900">卫星情报对话面板（CopilotKit）</div>
+                <div className="text-sm font-semibold text-slate-900">卫星数据对话面板</div>
                 <div className="text-xs text-slate-400">
-                  AG-UI 状态共享 · {state.llmConfigured ? "LLM 已接入" : "确定性回退模式"}
+                  数据面板 · {state.llmConfigured ? "LLM 已接入" : "确定性回退模式"}
                 </div>
               </div>
             </div>
-            <nav className="flex flex-wrap items-center gap-3 text-sm">
-              <Link href="/" className="rounded-full border border-[#e8ebf0] bg-white px-4 py-2 text-slate-600">
-                资讯流
-              </Link>
-              <Link href="/orchestration" className="rounded-full border border-[#e8ebf0] bg-white px-4 py-2 text-slate-600">
-                Agent 编排
-              </Link>
-              <Link href="/globe" className="rounded-full border border-[#e8ebf0] bg-white px-4 py-2 text-slate-600">
-                3D 星图
-              </Link>
-              <span className="rounded-full bg-[#1f2430] px-4 py-2 font-medium text-white">对话面板</span>
-            </nav>
+            <SiteNav />
           </div>
 
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Metric label="资讯条目" value={state.sourceSummary.totalItems || state.items.length} />
-            <Metric label="活跃来源" value={state.sourceSummary.liveSources || sources.length} tone="text-[#15803d]" />
+            <Metric label="数据条目" value={state.sourceSummary.totalItems || state.items.length} />
+            <Metric label="活跃数据源" value={state.sourceSummary.liveSources || sources.length} tone="text-[#15803d]" />
             <Metric label="趋势信号" value={state.trends.length} tone="text-[#b7791f]" />
             <Metric label="当前筛选" value={activeSource ?? "全部"} />
           </div>
@@ -125,7 +114,7 @@ function DashboardCopilotWorkspace() {
 
         <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_460px]">
           <div className="min-w-0 space-y-6">
-            <Panel kicker="Source Filter" title="来源筛选（可由对话驱动）">
+            <Panel kicker="Source Filter" title="数据源筛选（可由对话驱动）">
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -136,7 +125,7 @@ function DashboardCopilotWorkspace() {
                       : "border-[#e8ebf0] bg-white text-slate-600 hover:border-[#cfdcff]"
                   }`}
                 >
-                  全部来源
+                  全部数据源
                 </button>
                 {sources.map((source) => (
                   <button
@@ -154,13 +143,13 @@ function DashboardCopilotWorkspace() {
                 ))}
               </div>
               <p className="mt-3 text-xs text-slate-400">
-                试着在右侧对话框输入“筛选 {sources[0] ?? "某个来源"} 的动态”，让助手驱动筛选。
+                试着在右侧对话框输入“筛选 {sources[0] ?? "某个数据源"} 的数据”，让助手驱动筛选。
               </p>
             </Panel>
 
-            <Panel kicker="Live Feed" title={`资讯流（${visibleItems.length}）`}>
+            <Panel kicker="Live Data" title={`数据流（${visibleItems.length}）`}>
               {visibleItems.length === 0 ? (
-                <Empty>正在加载资讯流……</Empty>
+                <Empty>正在加载数据……</Empty>
               ) : (
                 <div className="space-y-3">
                   {visibleItems.map((item) => (
@@ -229,15 +218,15 @@ function DashboardCopilotWorkspace() {
             <div className="flex h-[78vh] flex-col overflow-hidden rounded-[30px] border border-[#ebedf2] bg-white shadow-[0_14px_34px_rgba(28,42,71,0.06)]">
               <div className="border-b border-[#eff1f4] px-5 py-4">
                 <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">CopilotKit Chat</div>
-                <h2 className="mt-1 text-lg font-semibold text-slate-900">与卫星情报对话</h2>
+                <h2 className="mt-1 text-lg font-semibold text-slate-900">与卫星数据对话</h2>
               </div>
               <div className="min-h-0 flex-1">
                 <CopilotChat
                   className="h-full"
                   labels={{
-                    title: "卫星情报助手",
-                    initial: "你好，我可以基于当前资讯流回答问题，并按来源筛选。试试“筛选某来源的动态”。",
-                    placeholder: "询问某个来源、地区或主题……",
+                    title: "卫星数据助手",
+                    initial: "你好，我可以基于当前数据回答问题，并按数据源筛选。试试“筛选某数据源的数据”。",
+                    placeholder: "询问某个数据源、地区或主题……",
                   }}
                 />
               </div>

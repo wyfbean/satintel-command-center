@@ -34,6 +34,13 @@ build-*.log
 # local verification artifacts
 scripts/shot-*.png
 
+# python backend
+backend/.venv/
+**/__pycache__/
+backend/.env
+backend/uploads/
+!backend/.env.example
+
 # env files (can opt-in for committing if needed)
 .env*
 

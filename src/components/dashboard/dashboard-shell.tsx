@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { SiteNav } from "@/components/site-nav";
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import { ChatPanel } from "@/components/dashboard/chat-panel";
@@ -162,20 +162,7 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
               </div>
             </div>
 
-            <nav className="hidden items-center gap-8 text-sm text-slate-500 lg:flex">
-              <span className="font-medium text-slate-900">资讯流</span>
-              <span>RSS 源</span>
-              <span>AI 抓取</span>
-              <span>Ask AI</span>
-              <Link href="/orchestration" className="transition hover:text-slate-900">
-                Agent 编排
-              </Link>
-              <span>中文</span>
-            </nav>
-
-            <Link href="/orchestration" className="rounded-full bg-[#111111] px-5 py-3 text-sm font-medium text-white">
-              查看 A2A 流程
-            </Link>
+            <SiteNav />
           </div>
 
           <section className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)_360px]">

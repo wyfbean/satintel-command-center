@@ -12,6 +12,15 @@ npm run lint     # eslint via eslint-config-next
 npm start        # next start (after build)
 ```
 
+The `/orchestration` chat needs the Python CrewAI agent backend (`backend/`):
+
+```bash
+cd backend && uv sync
+uv run uvicorn app:app --host 127.0.0.1 --port 8000 --reload   # AG-UI POST /agent
+```
+
+It runs in deterministic **mock mode** with zero env vars (still exercises the bundled satellite MCP tools); set `OPENAI_API_KEY` in `backend/.env` for the real CrewAI crew. See `docs/agent-backend-crewai.md`.
+
 There is no test runner configured; Phase 5 acceptance in `docs/system-blueprint.md` relies on `build`, `lint`, and manual flow checks (feed refresh, Ask AI, orchestration view).
 
 ## Environment
@@ -35,13 +44,18 @@ NEXT_PUBLIC_FEED_MODE=mock          # force dashboard to render frontendMockDash
 Next.js 16 App Router (React 19, Tailwind v4). Four pages share one backend:
 
 - `/` → `DashboardShell` (Chinese news feed + Ask AI), data from `getDashboardData()`.
-- `/orchestration` → `OrchestrationShell` — AG-UI conversational view of the A2A run (CopilotKit), driven by `OrchestrationMockAgent` replaying `src/lib/mock/a2a-orchestration.ts`.
-- `/dashboard` → `DashboardCopilotShell` — CopilotKit conversational dashboard over the feed, driven by `SatelliteDashboardAgent`.
+- `/orchestration` → `OrchestrationShell` — ChatGPT-style single-window `CopilotChat` bound to a **CrewAI** multi-agent backend over AG-UI (`HttpAgent` → Python FastAPI at `AGENT_BACKEND_URL`, default `http://127.0.0.1:8000/agent`). Multi-agent collaboration + MCP/A2A tool-call results render inline; supports satellite-image upload (VQA/segmentation). Requires the `backend/` service running (see `docs/agent-backend-crewai.md`); shows an offline banner otherwise.
+- `/dashboard` → `DashboardCopilotShell` — CopilotKit conversational dashboard; chat (right) + data panels from `/api/feed` (left), driven by `SatelliteDashboardAgent`. Headings are data-source-agnostic.
 - `/globe` → `GlobeShell` — 3D flagship-satellite map (react-globe.gl + satellite.js), data from `src/lib/satellites/catalog.ts`.
 
 ### AG-UI / CopilotKit layer (`src/lib/a2a/`, `src/app/api/copilotkit/`)
 
-`/orchestration` and `/dashboard` share the CopilotKit runtime at `src/app/api/copilotkit/route.ts`. Agents are in-process AG-UI `AbstractAgent`s registered in `CopilotRuntime({ agents })`; the serviceAdapter is `ExperimentalEmptyAdapter` (agents emit their own events, so **no LLM key is needed at the runtime level** — keep this invariant). Bind a page to an agent via `<CopilotKit agent="orchestration|satellite_dashboard">`. The A2A→AG-UI bridge (`OrchestrationMockAgent`) is the single swap point for a real A2A host — see `docs/a2a-orchestration-ui.md`. `SatelliteDashboardAgent` reuses `getDashboardData` + `generateChatAnswer` (preserving the deterministic fallback).
+`/orchestration` and `/dashboard` share the CopilotKit runtime at `src/app/api/copilotkit/route.ts`, with `ExperimentalEmptyAdapter` (agents emit their own events, so **no LLM key is needed at the runtime level**). Two agents are registered:
+
+- `satelliteAnalyst` — an `@ag-ui/client` `HttpAgent` pointing at the **CrewAI Python backend** (`backend/`, AG-UI `POST /agent`). This is the official CopilotKit↔CrewAI pattern; see `docs/agent-backend-crewai.md`. To run it: `cd backend && uv run uvicorn app:app --port 8000`.
+- `satellite_dashboard` — an in-process AG-UI `AbstractAgent` (`src/lib/a2a/dashboard-agent.ts`) reusing `getDashboardData` + `generateChatAnswer` (deterministic fallback preserved).
+
+Bind a page via `<CopilotKit agent="satelliteAnalyst|satellite_dashboard">`. The Python backend is the swap point for real agents/MCP/A2A (the old in-process `OrchestrationMockAgent` was removed). Shared navigation is `src/components/site-nav.tsx`.
 
 ### Ingestion pipeline (`src/lib/intel/`)
 
