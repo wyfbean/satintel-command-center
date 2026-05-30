@@ -1,6 +1,13 @@
 import OpenAI from "openai";
 
 import type { BriefingSection, ChatMessage, IntelItem } from "@/types/intel";
+import {
+  cacheGet,
+  cacheSet,
+  TTL,
+  itemSummaryKey,
+  briefingKey,
+} from "@/lib/intel/cache";
 
 const apiKey = process.env.OPENAI_API_KEY;
 const baseURL = process.env.OPENAI_BASE_URL;
@@ -50,9 +57,13 @@ function fallbackBriefing(items: IntelItem[]): BriefingSection[] {
 
 export async function enrichItemSummary(item: IntelItem): Promise<IntelItem> {
   const client = getClient();
+  if (!client) return item;
 
-  if (!client) {
-    return item;
+  // Check cache first — item content is stable so 7-day TTL is safe.
+  const key = itemSummaryKey(item.title, item.url, item.body);
+  const cached = cacheGet<{ summary: string; whyItMatters: string }>(key);
+  if (cached) {
+    return { ...item, summary: cached.summary, whyItMatters: cached.whyItMatters };
   }
 
   try {
@@ -77,11 +88,14 @@ export async function enrichItemSummary(item: IntelItem): Promise<IntelItem> {
     const summary = content.match(/SUMMARY:\s*(.+)/i)?.[1]?.trim();
     const why = content.match(/WHY:\s*(.+)/i)?.[1]?.trim();
 
-    return {
+    const result = {
       ...item,
       summary: summary || item.summary,
       whyItMatters: why || item.whyItMatters,
     };
+    // Persist to SQLite so identical items don't trigger another LLM call.
+    cacheSet(key, { summary: result.summary, whyItMatters: result.whyItMatters }, TTL.ITEM_SUMMARY);
+    return result;
   } catch {
     return item;
   }
@@ -89,10 +103,12 @@ export async function enrichItemSummary(item: IntelItem): Promise<IntelItem> {
 
 export async function generateBriefing(items: IntelItem[]): Promise<BriefingSection[]> {
   const client = getClient();
+  if (!client) return fallbackBriefing(items);
 
-  if (!client) {
-    return fallbackBriefing(items);
-  }
+  // Cache briefings for 6 hours keyed by the top-6 item fingerprint.
+  const key = briefingKey(items);
+  const cached = cacheGet<BriefingSection[]>(key);
+  if (cached) return cached;
 
   try {
     const completion = await client.chat.completions.create({
@@ -132,7 +148,9 @@ export async function generateBriefing(items: IntelItem[]): Promise<BriefingSect
         };
       });
 
-    return sections.length ? sections : fallbackBriefing(items);
+    const result = sections.length ? sections : fallbackBriefing(items);
+    cacheSet(key, result, TTL.BRIEFING);
+    return result;
   } catch {
     return fallbackBriefing(items);
   }
