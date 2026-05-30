@@ -46,10 +46,6 @@ function computeFreshnessScore(publishedAt: string) {
   return 0.24;
 }
 
-function toSentenceCase(input: string) {
-  return input.charAt(0).toUpperCase() + input.slice(1);
-}
-
 function inferEntities(record: RawIntelRecord) {
   const candidates = [
     record.sourceName,
@@ -61,12 +57,16 @@ function inferEntities(record: RawIntelRecord) {
 }
 
 function buildWhyItMatters(record: RawIntelRecord) {
-  const tagLead = record.tags.slice(0, 2).join(" + ");
-  return `${toSentenceCase(tagLead || "Signal")} 直接影响采集排期、下游采购需求或任务响应节奏。`;
+  const tagLead = record.tags.slice(0, 2).join("、");
+  return `该信号涉及${tagLead || "卫星"}领域，可能直接影响采集排期、下游采购需求或任务响应节奏。`;
 }
 
 function buildSummary(record: RawIntelRecord) {
-  const firstSentence = record.body.split(/[.!?]/).find((sentence) => sentence.trim().length > 18)?.trim();
+  // Try to find a reasonably long sentence; also handle Chinese sentence endings (。！？)
+  const firstSentence = record.body
+    .split(/[.!?。！？]/)
+    .find((s) => s.trim().length > 15)
+    ?.trim();
   return firstSentence ?? record.excerpt;
 }
 

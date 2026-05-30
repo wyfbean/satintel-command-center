@@ -1,12 +1,22 @@
 "use client";
 
 import { SiteNav } from "@/components/site-nav";
+import { RssManager } from "@/components/dashboard/rss-manager";
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import { ChatPanel } from "@/components/dashboard/chat-panel";
 import { FeedCard } from "@/components/dashboard/feed-card";
 import { frontendMockDashboardData } from "@/lib/mock/frontend-dashboard";
 import type { BriefingSection, DashboardData } from "@/types/intel";
+
+function RssIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <path d="M4 11a9 9 0 0 1 9 9" /><path d="M4 4a16 16 0 0 1 16 16" />
+      <circle cx="5" cy="19" r="1" fill="currentColor" />
+    </svg>
+  );
+}
 
 function formatDateTime(isoString: string) {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -36,6 +46,7 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
   const deferredQuery = useDeferredValue(query);
   const feedNodeMap = useRef(new Map<string, HTMLElement>());
   const scrollFrameRef = useRef<number | null>(null);
+  const [rssOpen, setRssOpen] = useState(false);
 
   const filteredItems = useMemo(() => {
     const normalizedQuery = deferredQuery.trim().toLowerCase();
@@ -198,7 +209,20 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
                   <span>活跃源 {data.sourceSummary.liveSources}</span>
                   <span>来源总数 {data.sourceSummary.totalSources}</span>
                   <span>{data.sourceSummary.llmConfigured ? "LLM 已接入" : "当前使用本地回退摘要"}</span>
+                  <button
+                    type="button"
+                    onClick={() => setRssOpen(true)}
+                    className="flex items-center gap-1.5 rounded-full border border-[#d8e3ff] bg-[#f4f7ff] px-3 py-1 text-xs font-medium text-[#3d74ff] hover:bg-[#e8f0ff] transition"
+                  >
+                    <RssIcon />
+                    管理 RSS 订阅
+                  </button>
                 </div>
+                <RssManager
+                  open={rssOpen}
+                  onClose={() => setRssOpen(false)}
+                  onChanged={() => { void refreshFeed(); }}
+                />
               </div>
             </section>
 

@@ -1,75 +1,75 @@
 import { runMockBackendIngestion } from "@/lib/backend/mock-backend";
 import { sourceCatalog } from "@/lib/intel/catalog";
 import { generateBriefing, enrichItemSummary, isLlmConfigured } from "@/lib/intel/llm";
+import { listFeeds } from "@/lib/intel/rss-store";
 import { dedupeAndRank, extractTrendSignals } from "@/lib/intel/scoring";
-import type { DashboardData, IntelItem } from "@/types/intel";
+import { RssAdapter } from "@/lib/intel/adapters/rss-adapter";
+import type { DashboardData, IntelItem, IntelSource } from "@/types/intel";
+
+const rssAdapter = new RssAdapter();
 
 function uniqueTags(items: IntelItem[]) {
   return Array.from(new Set(items.flatMap((item) => item.tags))).slice(0, 12);
 }
 
-function scorecard() {
-  return [
-    {
-      phase: "Phase 1",
-      achieved: 5,
-      target: 5,
-      note: "Research references and blueprint completed",
-    },
-    {
-      phase: "Phase 2",
-      achieved: 6,
-      target: 6,
-      note: "Workspace, modules, and typed model established",
-    },
-    {
-      phase: "Phase 3",
-      achieved: 4,
-      target: 4,
-      note: "Adapters, scoring, briefing, and chat abstraction implemented",
-    },
-    {
-      phase: "Phase 4",
-      achieved: 4,
-      target: 4,
-      note: "Dashboard, detail panel, briefing rail, and chat surface implemented",
-    },
-    {
-      phase: "Phase 5",
-      achieved: 3,
-      target: 3,
-      note: "Lint, build, feed refresh, and chat interaction verified",
-    },
-  ];
+/** Collect records from all user-added RSS feeds stored in SQLite. */
+async function collectUserFeeds() {
+  const feeds = listFeeds();
+  if (!feeds.length) return [];
+
+  const results = await Promise.allSettled(
+    feeds.map((feed) => {
+      const source: IntelSource = {
+        id: feed.id,
+        kind: "rss",
+        name: feed.name,
+        region: "用户订阅",
+        reliabilityScore: 0.8,
+        tags: feed.tags.length ? feed.tags : ["订阅"],
+        url: feed.url,
+      };
+      return rssAdapter.collect(source);
+    }),
+  );
+
+  return results
+    .filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<RssAdapter["collect"]>>> => r.status === "fulfilled")
+    .flatMap((r) => r.value);
 }
 
 export async function getDashboardData(): Promise<DashboardData> {
-  const ingestion = await runMockBackendIngestion();
-  const collected = ingestion.records;
+  // Run the static catalog ingestion and user RSS feeds in parallel.
+  const [ingestion, userRecords] = await Promise.all([
+    runMockBackendIngestion(),
+    collectUserFeeds(),
+  ]);
+
+  const collected = [...ingestion.records, ...userRecords];
   const ranked = dedupeAndRank(collected);
   const enriched = await Promise.all(ranked.slice(0, 8).map(enrichItemSummary));
   const items = enriched.concat(ranked.slice(8));
+
+  const allSources = sourceCatalog.length + listFeeds().length;
   const liveSources = new Set(items.filter((item) => item.channel !== "mock").map((item) => item.sourceId)).size;
 
   return {
     generatedAt: new Date().toISOString(),
-    dateTitle: "2026.05.23",
+    dateTitle: new Date().toLocaleDateString("zh-CN"),
     hero: {
-      eyebrow: "AI 抓取 + RSS 聚合 + Ask AI",
+      eyebrow: "AI 摘要 + RSS 聚合 + Ask AI",
       title: "卫星情报资讯流",
-      description:
-        "聚合卫星、遥感、微信行业内容与公开 RSS 订阅源，用 AI 提炼摘要，并支持围绕单条新闻继续追问。",
+      description: "聚合卫星遥感行业内容与 RSS 订阅源，AI 提炼中文摘要，可按来源筛选追问。",
     },
     items,
     trends: extractTrendSignals(items),
     briefing: await generateBriefing(items),
     sourceSummary: {
-      totalSources: sourceCatalog.length,
+      totalSources: allSources,
       liveSources,
       totalItems: items.length,
       llmConfigured: isLlmConfigured(),
     },
-    scorecard: scorecard(),
+    scorecard: [],
     filters: {
       sources: Array.from(new Set(items.map((item) => item.sourceName))),
       tags: uniqueTags(items),

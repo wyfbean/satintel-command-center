@@ -75,11 +75,14 @@ export async function enrichItemSummary(item: IntelItem): Promise<IntelItem> {
         {
           role: "system",
           content:
-            "你负责把卫星与遥感资讯压缩成中文简报。返回两行。第 1 行以 SUMMARY: 开头，第 2 行以 WHY: 开头。",
+            "你是卫星与遥感行业资讯压缩助手。必须只输出中文，禁止出现英文单词（专有名词缩写如 SAR、RGB、EO 除外）。" +
+            "严格按以下格式返回两行，不得添加额外文字：\n" +
+            "SUMMARY: <一句话中文摘要，不超过50字>\n" +
+            "WHY: <一句话说明为何值得关注，不超过40字>",
         },
         {
           role: "user",
-          content: `Title: ${item.title}\nSource: ${item.sourceName}\nTags: ${item.tags.join(", ")}\nBody: ${item.body}`,
+          content: `标题: ${item.title}\n来源: ${item.sourceName}\n标签: ${item.tags.join("、")}\n正文: ${item.body}`,
         },
       ],
     });
@@ -119,7 +122,8 @@ export async function generateBriefing(items: IntelItem[]): Promise<BriefingSect
         {
           role: "system",
           content:
-            "你负责生成中文卫星情报简报。严格返回三段，每段格式为：SECTION: heading :: body",
+            "你是卫星情报简报生成助手。所有输出必须是中文（专有名词缩写如 SAR、RGB、GEO 除外）。" +
+            "严格返回三段，每段格式为：SECTION: 标题 :: 正文内容。不得偏离此格式，不得输出英文句子。",
         },
         {
           role: "user",
@@ -127,7 +131,7 @@ export async function generateBriefing(items: IntelItem[]): Promise<BriefingSect
             .slice(0, 6)
             .map(
               (item, index) =>
-                `${index + 1}. ${item.title}\nSource: ${item.sourceName}\nTags: ${item.tags.join(", ")}\nSummary: ${item.summary}\nScore: ${item.compositeScore}`,
+                `${index + 1}. 标题：${item.title}\n来源：${item.sourceName}\n标签：${item.tags.join("、")}\n摘要：${item.summary}\n评分：${item.compositeScore}`,
             )
             .join("\n\n"),
         },
@@ -173,10 +177,8 @@ export async function generateChatAnswer(params: {
 
   if (!client) {
     const latestQuestion = messages.at(-1)?.content ?? "";
-    return `Grounded answer based on the current feed: ${contextItems
-      .slice(0, 2)
-      .map((item) => item.title)
-      .join(" | ")}。关于“${latestQuestion}”，当前最值得继续深挖的是采集节奏、采购落地和应急工作流这三条线。`;
+    const topTitles = contextItems.slice(0, 2).map((item) => item.title).join("、");
+    return `（演示模式，未接入 LLM）当前资讯参考：${topTitles}。关于”${latestQuestion}”，建议重点关注采集节奏、采购落地和应急工作流这三个方向。`;
   }
 
   const completion = await client.chat.completions.create({
@@ -187,11 +189,12 @@ export async function generateChatAnswer(params: {
       {
         role: "system",
         content:
-          "你是卫星情报协作助手。尽量只基于给定资讯回答，证据不足时明确说明不确定性。回答使用中文，并在适合时指出 RGB、SAR、MS 哪种模态能帮助后续判断。",
+          "你是卫星情报协作助手。所有回答必须用中文（专有名词缩写如 SAR、RGB、EO、GEO、LEO 可以保留）。" +
+          "尽量只基于给定资讯回答，证据不足时明确说明不确定性。在适合时指出 RGB、SAR、MS 哪种模态能帮助后续判断。",
       },
       {
         role: "system",
-        content: `Mission context: ${missionContext || "通用卫星市场监测"}\n\nSignal context:\n${contextBlock}`,
+        content: `任务背景：${missionContext || "通用卫星市场监测"}\n\n参考资讯：\n${contextBlock}`,
       },
       ...messages,
     ],
