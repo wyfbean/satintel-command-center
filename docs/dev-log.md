@@ -96,3 +96,25 @@ filterBySource 工具调用均在 SSE 流中确认。
 做 SGP4 推演，零网络即可定位。`scripts/verify-tle.mts` 验证 12 颗卫星全部得到物理合理位置
 （LEO ~500–800km、MEO ~20000km、GEO ~35786km）。`react-globe.gl` 经 `next/dynamic`
 （`ssr:false`）仅在浏览器加载，按国家筛选、点击查看详情。
+
+### 浏览器端验证（Playwright）与关键修复
+
+仅验证 SSR/SSE 不够——交互层才是交付物。用 Playwright（`scripts/verify-ui.mjs`，
+需 `npm i -D playwright && npx playwright install chromium`）真机驱动三页，发现并修复：
+
+1. **`/orchestration`、`/dashboard` 白屏崩溃**：在挂载 `useEffect` 里直接调用
+   `useCoAgent().run()` 会早于 agent 会话建立，于 `@ag-ui/client` 抛
+   `Cannot set properties of undefined (setting 'abortController')`，整页被 React 错误
+   边界接管。→ 不在挂载时调 `run()`。
+2. **自动开始回放不触发**：`useCoAgent().run()` 与 `useCopilotChat().appendMessage()`
+   在该版本都不能可靠派发一次 agent run；只有 CopilotChat 输入框自身的提交会。
+   → `/orchestration` 改为在挂载后驱动该输入框：用原生 setter 写值并派发 `input` +
+   `Enter`（与用户/Playwright 完全一致的路径），轮询等待输入框挂载；不在 cleanup 里
+   取消定时器（React StrictMode 开发期 mount→unmount→remount 会取消它），用 `started`
+   ref 保证只发一次。
+3. **`/dashboard` 面板解耦**：面板改为直接 `fetch('/api/feed')` 渲染（始终可用），
+   对话与 `filterBySource` 前端动作仍走 agent。
+
+验证结果（真机）：`/orchestration` 自动回放——对话气泡 + 9 张 A2A 状态调用卡片 +
+左侧状态面板（5 个 agent、artifact、指标）全部呈现；`/dashboard` 面板 17 条，输入
+“筛选 SpaceNews 订阅源”后列表收敛为 6；`/globe` WebGL 画布出图、12 颗卫星、点击出详情。
