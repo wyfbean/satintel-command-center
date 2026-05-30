@@ -102,8 +102,12 @@ def _attached_image(input_data: RunAgentInput) -> str | None:
         desc = (getattr(ctx, "description", "") or "").lower()
         if "image" in desc or "图像" in desc:
             val = getattr(ctx, "value", None)
-            if isinstance(val, str) and val:
-                return val
+            # CopilotKit may JSON-serialize an empty readable as '""'; only treat a
+            # genuine image reference (data URL or http URL) as an attachment.
+            if isinstance(val, str):
+                cleaned = val.strip().strip('"')
+                if cleaned.startswith("data:") or cleaned.startswith("http"):
+                    return cleaned
     return None
 
 

@@ -3,23 +3,28 @@ import {
   ExperimentalEmptyAdapter,
   copilotRuntimeNextJSAppRouterEndpoint,
 } from "@copilotkit/runtime";
+import { HttpAgent } from "@ag-ui/client";
 import { NextRequest } from "next/server";
 
-import { OrchestrationMockAgent } from "@/lib/a2a/orchestration-agent";
 import { SatelliteDashboardAgent } from "@/lib/a2a/dashboard-agent";
 
 /**
  * CopilotKit runtime endpoint shared by the AG-UI surfaces.
  *
- * Agents are registered as in-process AG-UI `AbstractAgent`s, so no external LLM
- * service adapter is required — `ExperimentalEmptyAdapter` is the documented choice
- * when the agents emit their own events. This keeps the zero-env-var invariant: the
- * orchestration replay needs no key. Live-LLM grounding is delegated to the agents
- * themselves (which reuse src/lib/intel/llm.ts and its deterministic fallback).
+ * - `satelliteAnalyst` bridges to the Python CrewAI backend over AG-UI via `HttpAgent`
+ *   (POST /agent). This is the official CopilotKit↔CrewAI pattern; the crew's multi-agent
+ *   collaboration and MCP/A2A tool-call results stream into the `/orchestration` chat.
+ * - `satellite_dashboard` stays in-process for `/dashboard`.
+ *
+ * `ExperimentalEmptyAdapter` is the documented adapter when agents emit their own events,
+ * so no LLM key is needed at the runtime level (the CrewAI backend handles its own LLM /
+ * mock fallback).
  */
 const runtime = new CopilotRuntime({
   agents: {
-    orchestration: new OrchestrationMockAgent(),
+    satelliteAnalyst: new HttpAgent({
+      url: process.env.AGENT_BACKEND_URL ?? "http://127.0.0.1:8000/agent",
+    }),
     satellite_dashboard: new SatelliteDashboardAgent(),
   },
 });
