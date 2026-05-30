@@ -29,6 +29,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+build-*.log
+
+# local verification artifacts
+scripts/shot-*.png
 
 # env files (can opt-in for committing if needed)
 .env*

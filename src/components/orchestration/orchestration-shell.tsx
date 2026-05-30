@@ -55,7 +55,7 @@ export function OrchestrationShell() {
 }
 
 function OrchestrationWorkspace() {
-  const { state: agentState, running, run } = useCoAgent<OrchestrationAgentState>({
+  const { state: agentState, running } = useCoAgent<OrchestrationAgentState>({
     name: AGENT_NAME,
     initialState,
   });
@@ -63,13 +63,35 @@ function OrchestrationWorkspace() {
   // STATE_SNAPSHOT lands, so merge over initialState rather than nullish-guarding.
   const state: OrchestrationAgentState = { ...initialState, ...(agentState ?? {}) };
 
-  // Auto-start the A2A replay once on mount (no user message required).
+  // Auto-start the A2A replay once on load. Neither useCoAgent().run() nor
+  // useCopilotChat().appendMessage() reliably dispatches an agent run in this
+  // CopilotKit version (only the chat input's own submit does), so we drive that
+  // input: set its value via the native setter and dispatch input + Enter — the
+  // exact path a user (and our Playwright check) exercises. We poll until the input
+  // mounts. No cleanup cancel + a `started` ref keep it to a single send under
+  // React StrictMode's mount→unmount→remount in dev.
   const started = useRef(false);
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    void run();
-  }, [run]);
+    let tries = 0;
+    const fire = () => {
+      tries += 1;
+      const input = document.querySelector<HTMLTextAreaElement>("textarea");
+      if (input) {
+        const setValue = Object.getOwnPropertyDescriptor(
+          Object.getPrototypeOf(input),
+          "value",
+        )?.set;
+        setValue?.call(input, "开始回放当前 A2A 多智能体编排任务");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        return;
+      }
+      if (tries < 25) setTimeout(fire, 300);
+    };
+    setTimeout(fire, 800);
+  }, []);
 
   // Channel 2: every A2A "state call" the agent makes is rendered as a card.
   useCopilotAction({

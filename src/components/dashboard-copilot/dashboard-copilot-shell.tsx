@@ -3,21 +3,19 @@
 import "@copilotkit/react-ui/styles.css";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { CopilotKit, useCoAgent, useCopilotAction, useCopilotReadable } from "@copilotkit/react-core";
+import { useEffect, useMemo, useState } from "react";
+import { CopilotKit, useCopilotAction, useCopilotReadable } from "@copilotkit/react-core";
 import { CopilotChat } from "@copilotkit/react-ui";
 
-import type { DashboardAgentState } from "@/lib/a2a/dashboard-agent";
+import type { DashboardData } from "@/types/intel";
 
 const AGENT_NAME = "satellite_dashboard";
 
-const initialState: DashboardAgentState = {
-  generatedAt: "",
+const emptySourceSummary: DashboardData["sourceSummary"] = {
+  totalSources: 0,
+  liveSources: 0,
+  totalItems: 0,
   llmConfigured: false,
-  items: [],
-  trends: [],
-  sourceSummary: { totalSources: 0, liveSources: 0, totalItems: 0, llmConfigured: false },
-  briefing: [],
 };
 
 export function DashboardCopilotShell() {
@@ -29,21 +27,32 @@ export function DashboardCopilotShell() {
 }
 
 function DashboardCopilotWorkspace() {
-  const { state: agentState, run } = useCoAgent<DashboardAgentState>({
-    name: AGENT_NAME,
-    initialState,
-  });
-  const state: DashboardAgentState = { ...initialState, ...(agentState ?? {}) };
-
+  // Panels are populated directly from the stable /api/feed contract — decoupled
+  // from the chat agent so they always render. The CopilotChat agent
+  // (satellite_dashboard) handles conversation + the filterBySource action.
+  const [data, setData] = useState<DashboardData | null>(null);
   const [activeSource, setActiveSource] = useState<string | null>(null);
 
-  // Auto-load the feed snapshot + welcome once on mount.
-  const started = useRef(false);
   useEffect(() => {
-    if (started.current) return;
-    started.current = true;
-    void run();
-  }, [run]);
+    let active = true;
+    fetch("/api/feed")
+      .then((r) => r.json())
+      .then((d: DashboardData) => {
+        if (active) setData(d);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const state = {
+    items: data?.items ?? [],
+    trends: data?.trends ?? [],
+    briefing: data?.briefing ?? [],
+    sourceSummary: data?.sourceSummary ?? emptySourceSummary,
+    llmConfigured: data?.sourceSummary.llmConfigured ?? false,
+  };
 
   const sources = useMemo(
     () => Array.from(new Set(state.items.map((item) => item.sourceName))).filter(Boolean),
