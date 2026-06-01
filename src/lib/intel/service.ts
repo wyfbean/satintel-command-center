@@ -1,6 +1,6 @@
 import { runMockBackendIngestion } from "@/lib/backend/mock-backend";
 import { sourceCatalog } from "@/lib/intel/catalog";
-import { generateBriefing, enrichItemSummary, isLlmConfigured } from "@/lib/intel/llm";
+import { generateBriefing, enrichItemSummary, translateTitle, isLlmConfigured } from "@/lib/intel/llm";
 import { listFeeds } from "@/lib/intel/rss-store";
 import { listArticles, countRecentArticles } from "@/lib/intel/article-store";
 import { dedupeAndRank, extractTrendSignals, toIntelItem } from "@/lib/intel/scoring";
@@ -83,8 +83,19 @@ async function getLiveDashboardItems(): Promise<IntelItem[]> {
   ]);
   const collected = [...ingestion.records, ...userRecords];
   const ranked = dedupeAndRank(collected);
-  const enriched = await Promise.all(ranked.slice(0, 8).map(enrichItemSummary));
-  return enriched.concat(ranked.slice(8));
+
+  // Enrich summaries for the top 20 items (results are SQLite-cached, no double billing).
+  const enriched = await Promise.all(ranked.slice(0, 20).map(enrichItemSummary));
+  const allItems = enriched.concat(ranked.slice(20));
+
+  // Translate every title to Chinese (cached 30 days — only new titles hit the LLM).
+  return Promise.all(
+    allItems.map(async (item) => {
+      if (item.channel === "mock") return item; // seeds are already Chinese
+      const titleZh = await translateTitle(item.title, item.body);
+      return titleZh !== item.title ? { ...item, title: titleZh } : item;
+    }),
+  );
 }
 
 export async function getDashboardData(): Promise<DashboardData> {

@@ -1,6 +1,6 @@
 "use client";
 
-import { SiteNav } from "@/components/site-nav";
+import { AppSidebar } from "@/components/app-sidebar";
 import { RssManager } from "@/components/dashboard/rss-manager";
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
@@ -148,24 +148,39 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
   /* ── render ──────────────────────────────────────────────────────── */
 
   return (
-    <main className="panel-grid min-h-screen px-4 py-6 text-slate-900 sm:px-6 lg:px-8">
-      <div className="mx-auto flex w-full max-w-[1520px] flex-col gap-6">
+    <div className="flex min-h-screen bg-[#f4f5f7] font-sans text-slate-900">
+      <AppSidebar />
 
-        {/* ── top navbar ── */}
-        <header>
-          <div className="mx-auto flex w-full max-w-[980px] items-center justify-between rounded-full border border-[#ebedf2] bg-white px-5 py-4 shadow-[0_14px_36px_rgba(28,42,71,0.08)]">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#1f2430] text-sm font-semibold text-white">
-                轨道
-              </div>
-              <div>
-                <div className="text-sm font-semibold text-slate-900">卫星情报资讯流</div>
-                <div className="text-xs text-slate-400">Orbit Intelligence Feed</div>
-              </div>
-            </div>
-            <SiteNav />
+      {/* scrollable main area */}
+      <div className="flex-1 overflow-y-auto">
+
+        {/* ── top bar ── */}
+        <header className="flex items-center justify-between border-b border-[#e2e8f0] bg-white px-6 py-3">
+          <div>
+            <h1 className="text-sm font-semibold text-slate-900">卫星情报资讯流</h1>
+            <p className="text-xs text-slate-400">
+              {data.sourceSummary.llmConfigured ? "LLM 已接入" : "演示模式"} ·
+              最新 {formatDateTime(data.generatedAt)}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1.5 text-xs text-slate-400">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#22c55e]" />
+              {data.sourceSummary.totalItems} 条 · {data.sourceSummary.totalSources} 源
+            </span>
+            <button
+              type="button"
+              onClick={() => setRssOpen(true)}
+              className="flex items-center gap-1.5 rounded-full border border-[#d8e3ff] bg-[#f4f7ff] px-3 py-1.5 text-xs font-medium text-[#3d74ff] hover:bg-[#e8f0ff] transition"
+            >
+              <RssIcon />
+              管理 RSS 订阅
+            </button>
           </div>
         </header>
+
+      <div className="px-5 py-5">
+        <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-5">
 
         {/* ── unified top widget: date + AI briefing + agent ── */}
         <section className="grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)_300px]">
@@ -187,14 +202,6 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
               <div className="mt-2 text-lg font-semibold leading-7">
                 {data.trends.slice(0, 3).map((t) => t.label).join("、") || "高频成像、政务采购、星座部署"}
               </div>
-              <button
-                type="button"
-                onClick={() => setRssOpen(true)}
-                className="mt-4 flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white/80 hover:bg-white/20 transition"
-              >
-                <RssIcon />
-                管理 RSS 订阅
-              </button>
             </div>
             <RssManager open={rssOpen} onClose={() => setRssOpen(false)} onChanged={() => void refreshFeed()} />
           </div>
@@ -467,8 +474,11 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
           </aside>
         </section>
 
+        </div>
       </div>
-    </main>
+
+      </div>
+    </div>
   );
 }
 

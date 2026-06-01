@@ -9,7 +9,7 @@ type SiteNavProps = {
 };
 
 const links = [
-  { href: "/", label: "资讯流" },
+  { href: "/news", label: "资讯流" },
   { href: "/orchestration", label: "智能体分析" },
   { href: "/dashboard", label: "数据面板" },
   { href: "/globe", label: "3D 星图" },
@@ -27,7 +27,7 @@ export function SiteNav({ variant = "light" }: SiteNavProps) {
   return (
     <nav className="flex flex-wrap items-center gap-2 text-sm">
       {links.map((link) => {
-        const isActive = link.href === "/" ? pathname === "/" : pathname.startsWith(link.href);
+        const isActive = pathname === link.href || (link.href !== "/news" && pathname.startsWith(link.href));
         return (
           <Link
             key={link.href}
