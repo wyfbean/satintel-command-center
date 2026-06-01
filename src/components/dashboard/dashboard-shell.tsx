@@ -27,6 +27,18 @@ function formatDateTime(isoString: string) {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+  }).format(new Date(isoString)); // "MM/DD HH:mm"
+}
+
+/** Full date+time for the article detail panel. */
+function formatFullDate(isoString: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
   }).format(new Date(isoString));
 }
 
@@ -449,7 +461,7 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
               <h2 className="mt-2 text-2xl font-semibold text-slate-900">{selectedItem?.title ?? "请选择一条新闻"}</h2>
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                 <span>{selectedItem?.sourceName}</span>
-                <span>{selectedItem ? formatDateTime(selectedItem.publishedAt) : ""}</span>
+                <span>{selectedItem ? formatFullDate(selectedItem.publishedAt) : ""}</span>
               </div>
               <div className="mt-4 rounded-[22px] bg-[#f7f9ff] px-4 py-4">
                 <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">AI 摘要</div>

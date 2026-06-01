@@ -3,11 +3,35 @@
 import type { IntelItem } from "@/types/intel";
 
 function formatTime(isoString: string) {
+  const d = new Date(isoString);
+  const now = new Date();
+  const isToday =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const isThisYear = d.getFullYear() === now.getFullYear();
+
+  if (isToday) {
+    // Same day → "今天 HH:mm"
+    return (
+      "今天 " +
+      new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(d)
+    );
+  }
+  if (isThisYear) {
+    // Same year → "MM/DD HH:mm"
+    return new Intl.DateTimeFormat("zh-CN", {
+      month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit",
+      hour12: false,
+    }).format(d);
+  }
+  // Different year → "YYYY/MM/DD HH:mm"
   return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
     hour12: false,
-  }).format(new Date(isoString));
+  }).format(d);
 }
 
 function scoreTone(score: number) {
