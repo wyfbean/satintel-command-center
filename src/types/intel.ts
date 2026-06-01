@@ -79,6 +79,7 @@ export type DashboardData = {
   filters: {
     sources: string[];
     tags: string[];
+    regions: string[];
   };
 };
 

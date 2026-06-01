@@ -30,6 +30,14 @@ function formatDateTime(isoString: string) {
   }).format(new Date(isoString));
 }
 
+const CJK_RE = /[一-鿿㐀-䶿＀-￯]/;
+function detectLang(title: string, body: string): "中文" | "英文" {
+  const sample = (title + " " + body).replace(/\s/g, "");
+  if (!sample) return "英文";
+  const cjk = [...sample].filter((c) => CJK_RE.test(c)).length;
+  return cjk / sample.length > 0.1 ? "中文" : "英文";
+}
+
 function todayParts() {
   const now = new Date();
   const day = now.getDate();
@@ -51,6 +59,8 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
   const [data, setData] = useState(bootData);
   const [selectedId, setSelectedId] = useState(bootData.items[0]?.id ?? "");
   const [sourceFilter, setSourceFilter] = useState<string>("全部");
+  const [regionFilter, setRegionFilter] = useState<string>("全部");
+  const [langFilter, setLangFilter] = useState<"全部" | "中文" | "英文">("全部");
   const [query, setQuery] = useState("");
   const [briefing, setBriefing] = useState<BriefingSection[]>(bootData.briefing);
   const [scrollProgress, setScrollProgress] = useState(0);
@@ -63,13 +73,13 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
   const filteredItems = useMemo(() => {
     const q = deferredQuery.trim().toLowerCase();
     return data.items.filter((item) => {
-      const matchesSource = sourceFilter === "全部" || item.sourceName === sourceFilter;
-      const matchesQuery =
-        q.length === 0 ||
-        `${item.title} ${item.summary} ${item.tags.join(" ")}`.toLowerCase().includes(q);
-      return matchesSource && matchesQuery;
+      if (sourceFilter !== "全部" && item.sourceName !== sourceFilter) return false;
+      if (regionFilter !== "全部" && item.region !== regionFilter) return false;
+      if (langFilter !== "全部" && detectLang(item.title, item.body) !== langFilter) return false;
+      if (q.length > 0 && !`${item.title} ${item.summary} ${item.tags.join(" ")}`.toLowerCase().includes(q)) return false;
+      return true;
     });
-  }, [data.items, deferredQuery, sourceFilter]);
+  }, [data.items, deferredQuery, sourceFilter, regionFilter, langFilter]);
 
   const selectedItem = filteredItems.find((i) => i.id === selectedId) ?? filteredItems[0] ?? data.items[0];
   const activeIndex = Math.max(0, filteredItems.findIndex((i) => i.id === selectedItem?.id));
@@ -257,24 +267,80 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
 
           {/* left sidebar */}
           <aside className="space-y-4 xl:sticky xl:top-6">
-            <div className="rounded-[28px] border border-[#ebedf2] bg-white p-5">
-              <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">来源过滤</div>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {["全部", ...data.filters.sources].map((source) => (
+            {/* filter panel */}
+            <div className="rounded-[28px] border border-[#ebedf2] bg-white p-5 space-y-5">
+
+              {/* active-filter summary badge row */}
+              {(sourceFilter !== "全部" || regionFilter !== "全部" || langFilter !== "全部") && (
+                <div className="flex flex-wrap gap-1.5">
+                  {sourceFilter !== "全部" && (
+                    <FilterBadge label={sourceFilter} onClear={() => setSourceFilter("全部")} />
+                  )}
+                  {regionFilter !== "全部" && (
+                    <FilterBadge label={regionFilter} onClear={() => setRegionFilter("全部")} />
+                  )}
+                  {langFilter !== "全部" && (
+                    <FilterBadge label={langFilter} onClear={() => setLangFilter("全部")} />
+                  )}
                   <button
-                    key={source}
                     type="button"
-                    onClick={() => setSourceFilter(source)}
-                    className={`rounded-full border px-3 py-1.5 text-sm transition ${
-                      sourceFilter === source
-                        ? "border-[#bfd0ff] bg-[#eef4ff] text-[#1f5eff]"
-                        : "border-[#e8ebf0] bg-white text-slate-500"
-                    }`}
+                    onClick={() => { setSourceFilter("全部"); setRegionFilter("全部"); setLangFilter("全部"); }}
+                    className="rounded-full bg-[#fef2f2] px-2.5 py-1 text-xs text-red-500 hover:bg-red-50 transition"
                   >
-                    {source}
+                    全部清除
                   </button>
-                ))}
+                </div>
+              )}
+
+              {/* source */}
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#3d74ff]">来源</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {["全部", ...data.filters.sources].map((src) => (
+                    <FilterChip
+                      key={src}
+                      label={src}
+                      active={sourceFilter === src}
+                      onClick={() => setSourceFilter(src)}
+                    />
+                  ))}
+                </div>
               </div>
+
+              <div className="border-t border-[#f1f3f6]" />
+
+              {/* region */}
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#3d74ff]">地区</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {["全部", ...(data.filters.regions ?? [])].map((reg) => (
+                    <FilterChip
+                      key={reg}
+                      label={reg}
+                      active={regionFilter === reg}
+                      onClick={() => setRegionFilter(reg)}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="border-t border-[#f1f3f6]" />
+
+              {/* language */}
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#3d74ff]">语言</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {(["全部", "中文", "英文"] as const).map((lang) => (
+                    <FilterChip
+                      key={lang}
+                      label={lang}
+                      active={langFilter === lang}
+                      onClick={() => setLangFilter(lang)}
+                    />
+                  ))}
+                </div>
+              </div>
+
             </div>
 
             <div className="rounded-[28px] border border-[#ebedf2] bg-white p-5">
@@ -403,5 +469,32 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
 
       </div>
     </main>
+  );
+}
+
+/* ── shared filter sub-components ─────────────────────────────────── */
+
+function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full border px-3 py-1.5 text-sm transition ${
+        active
+          ? "border-[#bfd0ff] bg-[#eef4ff] text-[#1f5eff]"
+          : "border-[#e8ebf0] bg-white text-slate-500 hover:border-[#bfd0ff] hover:text-[#1f5eff]"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function FilterBadge({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-[#eef4ff] px-2.5 py-1 text-xs font-medium text-[#1f5eff]">
+      {label}
+      <button type="button" onClick={onClear} className="hover:text-red-500 transition leading-none">×</button>
+    </span>
   );
 }

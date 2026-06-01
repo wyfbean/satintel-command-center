@@ -140,6 +140,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     filters: {
       sources: Array.from(new Set(items.map((item) => item.sourceName))),
       tags: uniqueTags(items),
+      regions: Array.from(new Set(items.map((item) => item.region).filter(Boolean))).sort(),
     },
   };
 }

@@ -40,5 +40,6 @@ export const frontendMockDashboardData: DashboardData = {
   filters: {
     sources: Array.from(new Set(items.map((item) => item.sourceName))),
     tags: Array.from(new Set(items.flatMap((item) => item.tags))).slice(0, 12),
+    regions: Array.from(new Set(items.map((item) => item.region).filter(Boolean))).sort(),
   },
 };
