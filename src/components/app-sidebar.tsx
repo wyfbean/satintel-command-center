@@ -27,8 +27,8 @@ export function AppSidebar() {
               title={label}
               className={`flex h-10 w-10 items-center justify-center rounded-xl transition ${
                 active
-                  ? "bg-[#3d74ff] text-white"
-                  : "text-slate-400 hover:bg-white/10 hover:text-white"
+                  ? "bg-[#3d74ff] text-white shadow-[0_2px_10px_rgba(61,116,255,0.4)]"
+                  : "text-slate-300 hover:bg-white/15 hover:text-white"
               }`}
             >
               {icon}

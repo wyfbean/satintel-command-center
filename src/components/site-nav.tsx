@@ -20,9 +20,11 @@ export function SiteNav({ variant = "light" }: SiteNavProps) {
   const isDark = variant === "dark";
 
   const base = isDark
-    ? "border-white/15 text-slate-300 hover:bg-white/5"
-    : "border-[#e8ebf0] bg-white text-slate-600 hover:border-[#cfdcff]";
-  const active = isDark ? "bg-white text-[#05070f]" : "bg-[#1f2430] text-white border-transparent";
+    ? "border-white/25 text-slate-200 hover:bg-white/10 hover:text-white"
+    : "border-[#c8d0e0] bg-white text-[#1a2540] hover:border-[#3d74ff] hover:text-[#2a55cc] hover:bg-[#f4f7ff]";
+  const active = isDark
+    ? "bg-white text-[#05070f] border-transparent"
+    : "bg-[#1a2540] text-white border-transparent shadow-[0_2px_8px_rgba(26,37,64,0.18)]";
 
   return (
     <nav className="flex flex-wrap items-center gap-2 text-sm">
