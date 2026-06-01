@@ -1,3 +1,4 @@
+import { AiCrawlerAdapter } from "@/lib/intel/adapters/ai-crawler";
 import { CrawlAdapter } from "@/lib/intel/adapters/crawl-adapter";
 import { MockAdapter } from "@/lib/intel/adapters/mock-adapter";
 import { RssAdapter } from "@/lib/intel/adapters/rss-adapter";
@@ -12,6 +13,7 @@ const adapterRegistry: Record<SourceKind, SourceAdapter> = {
   rss: new RssAdapter(),
   crawl: new CrawlAdapter(),
   "wechat-url": new WechatUrlAdapter(),
+  "ai-generated": new AiCrawlerAdapter(),
 };
 
 function hasConfiguredTarget(source: IntelSource) {

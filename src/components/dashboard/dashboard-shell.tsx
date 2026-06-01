@@ -120,6 +120,9 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
       setSelectedId(frontendMockDashboardData.items[0]?.id ?? "");
       return;
     }
+    // Trigger a background crawl cycle first so we get the freshest data,
+    // then reload the feed. Both run to completion before the UI updates.
+    await fetch("/api/crawl/trigger", { method: "POST" }).catch(() => {});
     const r = await fetch("/api/feed");
     const d = (await r.json()) as DashboardData;
     setData(d); setBriefing(d.briefing); setSelectedId(d.items[0]?.id ?? "");

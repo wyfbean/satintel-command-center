@@ -1,4 +1,4 @@
-export type SourceKind = "mock" | "rss" | "crawl" | "wechat-url";
+export type SourceKind = "mock" | "rss" | "crawl" | "wechat-url" | "ai-generated";
 
 export type IntelSource = {
   id: string;

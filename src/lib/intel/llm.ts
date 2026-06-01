@@ -7,6 +7,7 @@ import {
   TTL,
   itemSummaryKey,
   briefingKey,
+  hashKey,
 } from "@/lib/intel/cache";
 
 const apiKey = process.env.OPENAI_API_KEY;
@@ -201,4 +202,114 @@ export async function generateChatAnswer(params: {
   });
 
   return completion.choices[0]?.message?.content?.trim() ?? "No answer returned.";
+}
+
+/* ── Title translation ─────────────────────────────────────────────── */
+
+const CJK_RE = /[一-鿿㐀-䶿]/;
+/** True when the string already has enough Chinese characters (>20% of letters). */
+function isMostlyChinese(s: string): boolean {
+  const letters = s.replace(/\s/g, "");
+  if (!letters) return false;
+  const cjk = [...letters].filter((c) => CJK_RE.test(c)).length;
+  return cjk / letters.length > 0.2;
+}
+
+/**
+ * Translate an article title to Chinese, or return it unchanged if already
+ * mostly Chinese.  Result is cached for 30 days by title hash.
+ *
+ * Falls back to the original title when no LLM is configured.
+ */
+export async function translateTitle(title: string, bodyPreview = ""): Promise<string> {
+  if (isMostlyChinese(title)) return title;
+  const client = getClient();
+  if (!client) return title;
+
+  const key = hashKey(`title:${title}:${bodyPreview.slice(0, 80)}`);
+  const cached = cacheGet<string>(key);
+  if (cached) return cached;
+
+  try {
+    const completion = await client.chat.completions.create({
+      model,
+      temperature: 0.1,
+      max_tokens: 60,
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是卫星遥感行业标题翻译助手。将英文标题译为简洁的中文标题（20字以内）。" +
+            "保留 SAR、RGB、EO、GEO、LEO、NASA 等专有名词缩写。只输出中文标题本身，不加引号或解释。",
+        },
+        {
+          role: "user",
+          content: bodyPreview
+            ? `标题：${title}\n正文摘要：${bodyPreview.slice(0, 120)}`
+            : `标题：${title}`,
+        },
+      ],
+    });
+    const translated = completion.choices[0]?.message?.content?.trim() ?? title;
+    const result = translated || title;
+    cacheSet(key, result, TTL.TITLE);
+    return result;
+  } catch {
+    return title;
+  }
+}
+
+/* ── AI-generated articles batch ───────────────────────────────────── */
+
+export type AiArticleRaw = {
+  title: string;
+  body: string;
+  tags: string[];
+  region: string;
+  imageryModes: Array<"RGB" | "SAR" | "MS">;
+};
+
+/**
+ * Ask the LLM to generate a batch of plausible satellite-industry news items.
+ * Used by the AI crawler adapter to supplement sparse RSS feeds.
+ * Result is cached for 2 hours to avoid hammering the LLM on every reload.
+ */
+export async function generateAiArticles(count = 6): Promise<AiArticleRaw[]> {
+  const client = getClient();
+  if (!client) return [];
+
+  const cacheKey = hashKey(`ai-articles:${count}:${new Date().toISOString().slice(0, 13)}`);
+  const cached = cacheGet<AiArticleRaw[]>(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const completion = await client.chat.completions.create({
+      model,
+      temperature: 0.7,
+      max_tokens: 1200,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是卫星遥感行业分析师。生成 " + count + " 条真实感强的行业资讯（中文），" +
+            "覆盖 SAR 星座、光学成像、卫星发射、政务采购、应急响应、轨道技术等主题。" +
+            "以 JSON 格式返回，结构为：{\"articles\":[{\"title\":\"...\",\"body\":\"...(150字以内)\",\"tags\":[...],\"region\":\"...\",\"imageryModes\":[...]}]}\n" +
+            "imageryModes 只能包含 RGB、SAR、MS 中的一个或多个。region 使用中文地区名。",
+        },
+        {
+          role: "user",
+          content: `请生成 ${count} 条今日卫星遥感行业简讯，涵盖不同地区和技术方向。`,
+        },
+      ],
+    });
+
+    const raw = completion.choices[0]?.message?.content ?? "{}";
+    const parsed = JSON.parse(raw) as { articles?: AiArticleRaw[] };
+    const articles = parsed.articles ?? [];
+    if (articles.length) cacheSet(cacheKey, articles, TTL.AI_ARTICLES);
+    return articles;
+  } catch {
+    return [];
+  }
 }

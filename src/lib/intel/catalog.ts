@@ -65,4 +65,12 @@ export const sourceCatalog: IntelSource[] = [
     reliabilityScore: 0.7,
     tags: ["种子", "卫星"],
   },
+  {
+    id: "ai-intel-generator",
+    kind: "ai-generated",
+    name: "AI 情报生成",
+    region: "全球",
+    reliabilityScore: 0.75,
+    tags: ["AI", "卫星", "遥感"],
+  },
 ];

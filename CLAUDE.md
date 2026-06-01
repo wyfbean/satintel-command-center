@@ -59,41 +59,60 @@ Bind a page via `<CopilotKit agent="satelliteAnalyst|satellite_dashboard">`. The
 
 ### Ingestion pipeline (`src/lib/intel/`)
 
-The mock-backend facade in `src/lib/backend/mock-backend.ts` is the seam meant to be swapped for a real backend later. It dispatches to one adapter per `SourceKind`:
+`src/lib/intel/service.ts` is the orchestration entry point. It runs static catalog + user RSS feeds in parallel, then dedupes/ranks/enriches:
 
 ```
-sourceCatalog (catalog.ts)
+sourceCatalog (catalog.ts) + listFeeds() (rss-store.ts / SQLite)
   → adapterRegistry { mock | rss | crawl | wechat-url }   (mock-backend.ts)
   → RawIntelRecord[]                                       (types/intel.ts)
-  → dedupeAndRank + toIntelItem                            (scoring.ts)
-  → enrichItemSummary (top 8) + generateBriefing           (llm.ts)
-  → DashboardData                                          (service.ts)
+  → dedupeAndRank + extractTrendSignals                    (scoring.ts)
+  → enrichItemSummary (top 8 only) + generateBriefing      (llm.ts  ← cached)
+  → DashboardData
 ```
 
 Key invariants:
 
-- All adapters normalize to the same `RawIntelRecord` shape, so the UI never knows whether an item came from RSS, HTML crawl, WeChat URL, or seed data.
-- Scoring is `freshness*0.3 + relevance*0.42 + urgency*0.28`, keyword-driven (`relevanceKeywords` / `urgencyKeywords` in `scoring.ts`). Dedupe key is `title.toLowerCase()::url`.
-- LLM enrichment runs only on the top 8 ranked items to cap token spend; the rest keep heuristic `summary` / `whyItMatters`.
-- `CrawlAdapter` policy is intentionally conservative — fetch only explicitly configured public URLs, no login or anti-bot bypass. Preserve this when extending crawlers.
+- All adapters normalize to `RawIntelRecord`. The UI never knows the source kind.
+- Scoring: `freshness×0.3 + relevance×0.42 + urgency×0.28`. Dedupe key: `title.toLowerCase()::url`.
+- LLM enrichment on top 8 only to cap token spend. `enrichItemSummary` is cached 7 days; `generateBriefing` 6 hours — both in SQLite.
+- All LLM output must be Chinese. System prompts in `llm.ts` enforce this with explicit instructions. The `SUMMARY:`/`WHY:` and `SECTION: heading :: body` markers are load-bearing for the response parsers — do not reword.
+- `CrawlAdapter`: fetch only explicitly configured public URLs; no login, anti-bot bypass, or private content.
+
+### Persistence layer (`data/intel-cache.db`, SQLite via `better-sqlite3`)
+
+All SQLite I/O is **synchronous** (better-sqlite3 API). The DB is lazy-opened; any error sets `_failed = true` and all functions silently no-op. The `data/` directory is git-ignored.
+
+| Table | Module | Purpose |
+|---|---|---|
+| `llm_cache` | `src/lib/intel/cache.ts` | LLM response cache; per-entry SHA-256 key + TTL |
+| `user_rss_feeds` | `src/lib/intel/rss-store.ts` | User-managed subscriptions added via `/api/rss` |
+
+Note: `cache.ts` and `rss-store.ts` each maintain their **own** `_db` singleton pointing at the same file — they do not share a connection object.
 
 ### HTTP contracts (`src/app/api/`)
 
-The UI contract is stable and should not change without updating both `DashboardShell` and the mock backend overview:
+Stable contracts — do not change shape without updating both shells and the mock backend:
 
 - `GET /api/feed` → `DashboardData`
 - `GET /api/briefing` → `{ briefing: BriefingSection[] }`
-- `POST /api/chat` → `{ answer: string }`, body `{ messages, selectedIds, missionContext }`. When `selectedIds` is empty, the top 3 ranked items are used as grounding.
-- `GET /api/backend/overview` and `POST /api/backend/crawl` are inspection-only endpoints for the mock-backend facade.
+- `POST /api/chat` → `{ answer: string }`, body `{ messages, selectedIds?, missionContext? }`. Empty `selectedIds` → top 3 ranked items used as grounding.
+- `GET /api/rss` / `POST /api/rss` / `DELETE|PATCH /api/rss/:id` — user RSS CRUD (persisted to SQLite)
+- `POST /api/rss/test` → `{ count, title }` — validates a URL before saving
+- `GET /api/backend/overview` / `POST /api/backend/crawl` — inspection-only
 
-### Dashboard shell behavior (`src/components/dashboard/dashboard-shell.tsx`)
+### Dashboard shell (`src/components/dashboard/dashboard-shell.tsx`)
 
-- Setting `NEXT_PUBLIC_FEED_MODE=mock` bypasses server data and renders `frontendMockDashboardData` — used to debug scroll/selection/Ask AI without ingestion.
-- Scroll position drives `selectedId` via a viewport-anchor measurement; the right-side detail/briefing/chat panels follow scroll, not clicks alone. When changing feed layout, keep `feedNodeMap` registration intact or scroll-sync will break.
+- `NEXT_PUBLIC_FEED_MODE=mock` bypasses `/api/feed` and renders `frontendMockDashboardData`.
+- Scroll drives `selectedId` via `feedNodeMap` ref + viewport-anchor measurement. Changing feed card layout must preserve `registerNode(id, el)` calls or scroll-sync breaks.
+- The unified top widget (日期 + AI速览 + Agent) is rendered before the 3-column feed grid. `今日AI速览` is **not** in the right sidebar — it was moved to the top widget.
 
-### A2A orchestration (`/orchestration`)
+### `/orchestration` shell
 
-Currently fed by `src/lib/mock/a2a-orchestration.ts`. Per `docs/a2a-orchestration-ui.md`, the planned real integration is `GET /api/a2a/runs/:id` plus a streaming proxy for `message/stream` / `tasks/subscribe`. Schema-validate AgentCard, message, and artifact payloads server-side before passing them to the UI or LLM context. The news contract (`/api/feed`, `/api/briefing`, `/api/chat`) must remain unchanged when wiring this up.
+`useCopilotAction({ name: "*", render })` catches all tool calls. The render callback returns JSX — use `Boolean(unknownValue)` (not `unknownValue &&`) when gating JSX on `unknown`-typed render props (TS error 2322 otherwise). `dynamic = "force-dynamic"` is required on the page.
+
+### Globe (`/globe`)
+
+`next/dynamic` with `ssr: false`. Pin `satellite.js` to **v5** (pure-JS SGP4) — v7 imports `node:worker_threads` and hangs turbopack production builds. `transpilePackages: ["react-globe.gl", "three-globe"]` in `next.config.ts` is required.
 
 ## Conventions
 

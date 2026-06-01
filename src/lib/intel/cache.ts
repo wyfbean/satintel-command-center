@@ -45,7 +45,7 @@ function getDb() {
   }
 }
 
-function hashKey(input: string): string {
+export function hashKey(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex").slice(0, 40);
 }
 
@@ -82,8 +82,10 @@ export function cacheSet(key: string, value: unknown, ttlSeconds: number): void 
 
 /** Cache TTLs in seconds */
 export const TTL = {
-  ITEM_SUMMARY: 7 * 24 * 3600,  // 7 days — article content doesn't change
-  BRIEFING:     6 * 3600,        // 6 hours — want periodic freshness
+  ITEM_SUMMARY: 7 * 24 * 3600,   // 7 days — article content doesn't change
+  BRIEFING:     6 * 3600,         // 6 hours — want periodic freshness
+  TITLE:        30 * 24 * 3600,   // 30 days — translated titles are stable
+  AI_ARTICLES:  2 * 3600,         // 2 hours — AI-generated batch
 };
 
 /** Stable cache key for a single item enrichment */
