@@ -1,0 +1,54 @@
+services:
+
+  # ── Next.js frontend + ingestion scheduler ────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      # LLM (required for AI summaries / translations; app works without it)
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-4o-mini}"
+      # Agent backend (CrewAI service below)
+      AGENT_BACKEND_URL: "http://agent:8000/agent"
+      # RSS / crawl sources (optional, comma-separated)
+      SATINTEL_RSS_SOURCES: "${SATINTEL_RSS_SOURCES:-}"
+      SATINTEL_CRAWL_URLS: "${SATINTEL_CRAWL_URLS:-}"
+    volumes:
+      # Persist the SQLite DB (articles, LLM cache, RSS subscriptions)
+      - satintel_data:/app/data
+    depends_on:
+      - agent
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/crawl/status', r => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── CrewAI multi-agent backend ────────────────────────────────────
+  agent:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-4o-mini}"
+      # Allow the web container to call this service
+      ALLOWED_ORIGINS: "http://web:3000,http://localhost:3000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 20s
+      timeout: 8s
+      retries: 3
+
+volumes:
+  satintel_data:
+    driver: local

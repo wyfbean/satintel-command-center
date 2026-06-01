@@ -19,10 +19,12 @@ from satintel_agents.agui import run_agent_stream
 
 app = FastAPI(title="SatIntel Agents", version="0.1.0")
 
-# Dev CORS: the Next.js app proxies /api/agent → here, but allow direct calls too.
+# CORS: comma-separated origins via env var; fallback to localhost for dev.
+_raw_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
