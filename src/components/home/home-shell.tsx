@@ -12,7 +12,7 @@ import { TrendDashboard } from "@/components/home/trend-dashboard";
 import { NewsFeed } from "@/components/home/news-feed";
 import { frontendMockDashboardData } from "@/lib/mock/frontend-dashboard";
 import type { DashboardAgentState } from "@/lib/a2a/dashboard-agent";
-import type { DashboardData, IntelItem } from "@/types/intel";
+import type { BriefingSection, DashboardData, IntelItem } from "@/types/intel";
 
 const AGENT_NAME = "satellite_dashboard";
 const useFrontendMock = process.env.NEXT_PUBLIC_FEED_MODE === "mock";
@@ -51,6 +51,7 @@ function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
   const [feedData, setFeedData] = useState<DashboardData>(bootData);
   const [activeSource, setActiveSource] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<IntelItem | null>(null);
+  const [briefingOverride, setBriefingOverride] = useState<BriefingSection[] | null>(null);
   const [rssOpen, setRssOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
 
@@ -83,6 +84,27 @@ function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
       }
       const matched = sources.find((n) => n === source || n.includes(source));
       setActiveSource(matched ?? null);
+    },
+  });
+
+  // Chat-driven 情报简报 optimisation: the backend LLM rewrites the briefing and
+  // pushes it here, where it overrides the snapshot briefing in the hero panel.
+  useCopilotAction({
+    name: "updateBriefing",
+    description: "用优化后的内容更新顶部「情报简报」面板。",
+    parameters: [
+      {
+        name: "sections",
+        type: "object[]",
+        description: "简报段落列表",
+        attributes: [
+          { name: "heading", type: "string", description: "段落标题" },
+          { name: "body", type: "string", description: "段落正文" },
+        ],
+      },
+    ],
+    handler: ({ sections }: { sections: BriefingSection[] }) => {
+      if (Array.isArray(sections) && sections.length) setBriefingOverride(sections);
     },
   });
 
@@ -120,6 +142,7 @@ function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
   });
 
   async function refreshFeed() {
+    setBriefingOverride(null); // a fresh crawl supersedes any chat-optimised briefing
     if (useFrontendMock) {
       setFeedData(frontendMockDashboardData);
       setAgentState(toAgentState(frontendMockDashboardData));
@@ -164,7 +187,7 @@ function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
         <RssManager open={rssOpen} onClose={() => setRssOpen(false)} onChanged={() => void refreshFeed()} />
 
         {/* top: AG-UI driven trend dashboard */}
-        <TrendDashboard state={agentState} />
+        <TrendDashboard state={agentState} briefingOverride={briefingOverride} />
 
         {/* sunken: news feed */}
         <NewsFeed

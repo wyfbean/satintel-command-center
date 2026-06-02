@@ -1,7 +1,7 @@
 "use client";
 
 import type { DashboardAgentState } from "@/lib/a2a/dashboard-agent";
-import type { TrendSignal } from "@/types/intel";
+import type { BriefingSection, TrendSignal } from "@/types/intel";
 
 /**
  * AG-UI 驱动的「今日趋势」hero。
@@ -23,11 +23,12 @@ function formatDateTime(isoString: string) {
   }).format(new Date(isoString));
 }
 
-type Props = { state: DashboardAgentState };
+type Props = { state: DashboardAgentState; briefingOverride?: BriefingSection[] | null };
 
-export function TrendDashboard({ state }: Props) {
+export function TrendDashboard({ state, briefingOverride }: Props) {
   const trends = state.trends ?? [];
-  const briefing = state.briefing ?? [];
+  // A chat-optimised briefing (via the updateBriefing tool) wins over the snapshot.
+  const briefing = briefingOverride ?? state.briefing ?? [];
   const sourceSummary = state.sourceSummary ?? { totalSources: 0, liveSources: 0, totalItems: 0, llmConfigured: false };
   const { day, month, weekday } = todayParts();
   const topThemes = trends.slice(0, 3).map((t) => t.label).join("、") || "高频成像、政务采购、星座部署";

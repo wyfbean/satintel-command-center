@@ -105,12 +105,14 @@ export async function enrichItemSummary(item: IntelItem): Promise<IntelItem> {
   }
 }
 
-export async function generateBriefing(items: IntelItem[]): Promise<BriefingSection[]> {
+export async function generateBriefing(items: IntelItem[], instruction?: string): Promise<BriefingSection[]> {
   const client = getClient();
   if (!client) return fallbackBriefing(items);
 
-  // Cache briefings for 6 hours keyed by the top-6 item fingerprint.
-  const key = briefingKey(items);
+  // Cache briefings for 6 hours keyed by the top-6 item fingerprint. A custom
+  // instruction (e.g. "写得更精炼") namespaces the key so optimisation requests
+  // don't collide with the default briefing and stay honoured.
+  const key = instruction ? `${briefingKey(items)}::${hashKey(instruction)}` : briefingKey(items);
   const cached = cacheGet<BriefingSection[]>(key);
   if (cached) return cached;
 
@@ -124,7 +126,8 @@ export async function generateBriefing(items: IntelItem[]): Promise<BriefingSect
           role: "system",
           content:
             "你是卫星情报简报生成助手。所有输出必须是中文（专有名词缩写如 SAR、RGB、GEO 除外）。" +
-            "严格返回三段，每段格式为：SECTION: 标题 :: 正文内容。不得偏离此格式，不得输出英文句子。",
+            "严格返回三段，每段格式为：SECTION: 标题 :: 正文内容。不得偏离此格式，不得输出英文句子。" +
+            (instruction ? `\n请遵循用户的优化要求：${instruction}` : ""),
         },
         {
           role: "user",

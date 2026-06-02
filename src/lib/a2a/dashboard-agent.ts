@@ -1,7 +1,7 @@
 import { AbstractAgent, EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/client";
 import { Observable } from "rxjs";
 
-import { generateChatAnswer } from "@/lib/intel/llm";
+import { generateChatAnswer, generateBriefing } from "@/lib/intel/llm";
 import { getDashboardData } from "@/lib/intel/service";
 import { extractTrendSignals } from "@/lib/intel/scoring";
 import type { ChatMessage, DashboardData } from "@/types/intel";
@@ -33,50 +33,77 @@ export class SatelliteDashboardAgent extends AbstractAgent {
         const messages = extractChatMessages(input);
         const latestUser = [...messages].reverse().find((message) => message.role === "user");
 
+        // A run triggered by a frontend tool result (rather than a fresh human
+        // message) is a *continuation*: its last message is a tool/assistant
+        // message, not a user one. We must NOT emit tool calls on continuation
+        // runs — doing so makes the result trigger yet another run, an infinite
+        // "filterBySource 完成…" loop. Tool calls fire only on a fresh user turn.
+        const isUserTurn = input.messages?.at(-1)?.role === "user";
+
         // Resolve the active source filter from the latest message, preserving
         // any prior filter (carried in the agent state) when the user neither
         // names a new source nor asks to reset.
         const priorState = input.state as DashboardAgentState | undefined;
-        const appliedSource = resolveFilter(dashboard, latestUser?.content, priorState?.appliedSource ?? null);
+        const priorSource = priorState?.appliedSource ?? null;
+        const appliedSource = resolveFilter(dashboard, latestUser?.content, priorSource);
+
+        // Does the user want the 情报简报 panel regenerated/optimised this turn?
+        const wantsBriefing = Boolean(isUserTurn && latestUser && BRIEFING_RE.test(latestUser.content));
 
         // The snapshot reflects the filter, so the top dashboard (KPIs / trends /
         // briefing) is genuinely chat-driven — not just the feed below it.
         const view = appliedSource ? filterDashboard(dashboard, appliedSource) : dashboard;
         emit({ type: EventType.STATE_SNAPSHOT, snapshot: toDashboardSnapshot(view, appliedSource) } as BaseEvent);
 
-        // Keep the feed below in sync via the `filterBySource` frontend action
-        // (CopilotKit frontend-action loop). Emitted every run so the feed and
-        // the hero never drift apart.
-        const hasFilterTool = (input.tools ?? []).some((tool) => tool.name === "filterBySource");
-        if (hasFilterTool) {
+        const tools = input.tools ?? [];
+        const hasTool = (name: string) => tools.some((tool) => tool.name === name);
+
+        // Frontend tool calls — only on a fresh user turn (loop guard above) and
+        // only when something actually changed.
+        if (isUserTurn && hasTool("filterBySource") && appliedSource !== priorSource) {
           const toolCallId = `call-filter-${runId}`;
           emit({ type: EventType.TOOL_CALL_START, toolCallId, toolCallName: "filterBySource" } as BaseEvent);
           emit({ type: EventType.TOOL_CALL_ARGS, toolCallId, delta: JSON.stringify({ source: appliedSource ?? "全部" }) } as BaseEvent);
           emit({ type: EventType.TOOL_CALL_END, toolCallId } as BaseEvent);
         }
 
+        // Briefing optimisation: the backend LLM rewrites the 情报简报 from the
+        // (filtered) items, optionally honouring the user's instruction, and the
+        // result is pushed into the panel via the `updateBriefing` frontend tool.
+        let optimisedBriefing: DashboardData["briefing"] | null = null;
+        if (wantsBriefing && hasTool("updateBriefing") && latestUser) {
+          optimisedBriefing = await generateBriefing(view.items, latestUser.content);
+          const toolCallId = `call-briefing-${runId}`;
+          emit({ type: EventType.TOOL_CALL_START, toolCallId, toolCallName: "updateBriefing" } as BaseEvent);
+          emit({ type: EventType.TOOL_CALL_ARGS, toolCallId, delta: JSON.stringify({ sections: optimisedBriefing }) } as BaseEvent);
+          emit({ type: EventType.TOOL_CALL_END, toolCallId } as BaseEvent);
+        }
+
         const messageId = `msg-${runId}`;
         emit({ type: EventType.TEXT_MESSAGE_START, messageId, role: "assistant" } as BaseEvent);
 
+        let answer: string;
         if (!latestUser) {
-          emit({
-            type: EventType.TEXT_MESSAGE_CONTENT,
-            messageId,
-            delta: buildWelcome(dashboard),
-          } as BaseEvent);
+          answer = buildWelcome(dashboard);
+        } else if (!isUserTurn) {
+          // Continuation run after a tool result — keep it terminal & quiet.
+          answer = "面板已更新。";
+        } else if (optimisedBriefing) {
+          // Don't dump the briefing into the chat — it now lives in the panel.
+          answer = `已根据${appliedSource ? `「${appliedSource}」来源` : "最新资讯"}重新优化『情报简报』面板，共 ${optimisedBriefing.length} 段。`;
         } else {
           // Frontend `useCopilotReadable` context grounds the answer in what the
           // operator currently sees (active filter, selected item).
           const frontendContext = (input.context ?? [])
             .map((entry) => `${entry.description}: ${entry.value}`)
             .join("\n");
-          const answer = await generateChatAnswer({
+          answer = await generateChatAnswer({
             messages,
-            contextItems: dashboard.items.slice(0, 5),
+            contextItems: view.items.slice(0, 5),
             missionContext: `卫星情报对话面板${frontendContext ? `\n界面上下文：\n${frontendContext}` : ""}`,
           });
-          emit({ type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: answer } as BaseEvent);
         }
+        emit({ type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: answer } as BaseEvent);
 
         emit({ type: EventType.TEXT_MESSAGE_END, messageId } as BaseEvent);
         emit({ type: EventType.RUN_FINISHED, threadId, runId } as BaseEvent);
@@ -118,6 +145,8 @@ function toDashboardSnapshot(dashboard: DashboardData, appliedSource: string | n
 }
 
 const RESET_RE = /全部|所有|重置|清除|取消筛选|reset|clear|^all$/i;
+/** Intent to (re)generate the 情报简报 panel. */
+const BRIEFING_RE = /简报|概览|brief|summary|综述|总结/i;
 
 /**
  * Decide the source filter for this turn: a newly named source wins; an
