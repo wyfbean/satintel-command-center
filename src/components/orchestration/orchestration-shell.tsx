@@ -110,7 +110,7 @@ function OrchestrationWorkspace() {
           </div>
           {image && (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={image.dataUrl} alt="attached" className="mt-2 w-full rounded-lg object-cover" style={{ maxHeight: 120 }} />
+            <img src={image.dataUrl} alt="已附加图像" className="mt-2 w-full rounded-lg object-cover" style={{ maxHeight: 120 }} />
           )}
         </div>
 
@@ -160,7 +160,7 @@ function OrchestrationWorkspace() {
             <p className="text-xs text-slate-400">CrewAI · MCP 工具 · AG-UI</p>
           </div>
           <span className="hidden rounded-full bg-[#f1f5f9] px-3 py-1 text-xs text-slate-500 xl:inline">
-            Coordinator → Image Analyst → Reporter
+            协调者 → 图像分析师 → 报告生成
           </span>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden bg-[#f9fafb]">
@@ -205,8 +205,8 @@ function ToolCard({ name, args, status, result, image }: {
           <div className="space-y-1">
             {objects.map((o, i) => (
               <div key={i} className="flex justify-between rounded-lg bg-[#f8fafc] px-3 py-1.5 text-xs">
-                <span className="font-medium text-slate-700">{String(o.class ?? "object")}</span>
-                <span className="text-slate-400">conf {String(o.confidence ?? "—")}</span>
+                <span className="font-medium text-slate-700">{String(o.class ?? "目标")}</span>
+                <span className="text-slate-400">置信度 {String(o.confidence ?? "—")}</span>
               </div>
             ))}
           </div>
@@ -217,7 +217,7 @@ function ToolCard({ name, args, status, result, image }: {
           </pre>
         )}
         {Boolean(argObj) && Object.keys(argObj as object).length > 0 && (
-          <div className="mt-1.5 text-[11px] text-slate-400">args: {JSON.stringify(argObj)}</div>
+          <div className="mt-1.5 text-[11px] text-slate-400">参数: {JSON.stringify(argObj)}</div>
         )}
       </div>
     </div>
@@ -228,7 +228,7 @@ function SegmentationOverlay({ image, regions }: { image: string; regions: Regio
   return (
     <div className="relative mb-2 overflow-hidden rounded-lg">
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={image} alt="analysis" className="block w-full" />
+      <img src={image} alt="分析图像" className="block w-full" />
       <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
         {regions.map((r, i) => {
           const [x1, y1, x2, y2] = r.bbox;

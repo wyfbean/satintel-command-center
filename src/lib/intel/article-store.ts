@@ -109,6 +109,85 @@ export function upsertArticle(p: UpsertPayload): boolean {
   return !existing;
 }
 
+/**
+ * Normalize a URL for duplicate detection: lowercase host, drop the query
+ * string / fragment and any trailing slash. Two records that point at the same
+ * canonical article (e.g. with/without utm params or a trailing slash) collapse
+ * to one key. Falls back to the raw string when the URL can't be parsed.
+ */
+export function normalizeUrl(raw: string): string {
+  if (!raw) return "";
+  try {
+    const u = new URL(raw);
+    const path = u.pathname.replace(/\/+$/, "");
+    return `${u.hostname.toLowerCase()}${path}`;
+  } catch {
+    return raw.split("?")[0].replace(/\/+$/, "").toLowerCase();
+  }
+}
+
+/** Update only the Chinese title of an existing article (used by the backfill). */
+export function updateTitleZh(id: string, titleZh: string): void {
+  const db = getDb();
+  if (!db) return;
+  db.prepare("UPDATE articles SET title_zh = ? WHERE id = ?").run(titleZh, id);
+}
+
+/**
+ * Articles whose Chinese title is missing or identical to the source title
+ * (i.e. translation never succeeded). Excludes mock seeds (already Chinese).
+ * Used by the translation backfill so stale rows get fixed even after they
+ * drop out of the live feed window.
+ */
+export function listUntranslatedArticles(limit = 20): StoredArticle[] {
+  const db = getDb();
+  if (!db) return [];
+  const rows = db
+    .prepare(
+      `SELECT * FROM articles
+       WHERE channel != 'mock' AND (title_zh = '' OR title_zh = title)
+       ORDER BY crawled_at DESC LIMIT ?`,
+    )
+    .all(limit) as DbRow[];
+  return rows.map(rowToArticle);
+}
+
+/**
+ * Collapse rows that point at the same canonical URL (e.g. left over from an
+ * older id scheme). Keeps the highest composite_score, newest crawl as
+ * tiebreaker; deletes the rest. Returns the number of rows removed.
+ */
+export function dedupeByUrl(): number {
+  const db = getDb();
+  if (!db) return 0;
+  const rows = db
+    .prepare("SELECT id, url, composite_score, crawled_at FROM articles")
+    .all() as Array<{ id: string; url: string; composite_score: number; crawled_at: number }>;
+
+  const keepByKey = new Map<string, { id: string; composite_score: number; crawled_at: number }>();
+  const toDelete: string[] = [];
+  for (const r of rows) {
+    const key = normalizeUrl(r.url);
+    const cur = keepByKey.get(key);
+    if (!cur) {
+      keepByKey.set(key, r);
+    } else if (
+      r.composite_score > cur.composite_score ||
+      (r.composite_score === cur.composite_score && r.crawled_at > cur.crawled_at)
+    ) {
+      toDelete.push(cur.id);
+      keepByKey.set(key, r);
+    } else {
+      toDelete.push(r.id);
+    }
+  }
+  if (!toDelete.length) return 0;
+  const del = db.prepare("DELETE FROM articles WHERE id = ?");
+  const tx = db.transaction((ids: string[]) => ids.forEach((id) => del.run(id)));
+  tx(toDelete);
+  return toDelete.length;
+}
+
 export type ListOptions = {
   limit?: number;
   sinceMs?: number;         // only articles crawled after this epoch ms
@@ -148,8 +227,12 @@ export function countRecentArticles(sinceMs: number): number {
   return r.n;
 }
 
-/** Delete articles older than `keepDays` to prevent unbounded growth. */
-export function pruneOldArticles(keepDays = 14): number {
+/**
+ * Delete articles older than `keepDays`. Retention is deliberately long (90d):
+ * the full crawl history is kept as a corpus for future retrieval / rerank
+ * even though the dashboard only renders the most recent 48h window.
+ */
+export function pruneOldArticles(keepDays = 90): number {
   const db = getDb();
   if (!db) return 0;
   const cutoff = Date.now() - keepDays * 24 * 3600 * 1000;

@@ -66,7 +66,7 @@ export function ChatPanel({ selectedItems }: ChatPanelProps) {
     <section className="rounded-[28px] border border-[#ebeef3] bg-white p-5 shadow-[0_12px_28px_rgba(28,42,71,0.06)]">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">Ask AI about this news</div>
+          <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">向 AI 追问这条资讯</div>
           <h3 className="mt-2 text-2xl font-semibold text-slate-900">围绕当前新闻追问</h3>
         </div>
         <div className="rounded-full bg-[#eefbf1] px-3 py-1 text-xs text-[#15803d]">上下文 {selectedItems.length} 条</div>

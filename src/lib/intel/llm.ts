@@ -221,14 +221,22 @@ function isMostlyChinese(s: string): boolean {
  *
  * Falls back to the original title when no LLM is configured.
  */
-export async function translateTitle(title: string, bodyPreview = ""): Promise<string> {
+export async function translateTitle(
+  title: string,
+  bodyPreview = "",
+  opts: { bypassCache?: boolean } = {},
+): Promise<string> {
   if (isMostlyChinese(title)) return title;
   const client = getClient();
   if (!client) return title;
 
   const key = hashKey(`title:${title}:${bodyPreview.slice(0, 80)}`);
-  const cached = cacheGet<string>(key);
-  if (cached) return cached;
+  if (!opts.bypassCache) {
+    const cached = cacheGet<string>(key);
+    // Only trust a cached value that is actually Chinese — earlier versions
+    // could poison the cache with the English original on an empty response.
+    if (cached && isMostlyChinese(cached)) return cached;
+  }
 
   try {
     const completion = await client.chat.completions.create({
@@ -250,10 +258,15 @@ export async function translateTitle(title: string, bodyPreview = ""): Promise<s
         },
       ],
     });
-    const translated = completion.choices[0]?.message?.content?.trim() ?? title;
-    const result = translated || title;
-    cacheSet(key, result, TTL.TITLE);
-    return result;
+    const translated = completion.choices[0]?.message?.content?.trim() ?? "";
+    // Only cache (and return) a genuine Chinese translation. Empty or
+    // still-English output must NOT be cached, otherwise the English original
+    // would be served for the full 30-day TTL and never retried.
+    if (translated && isMostlyChinese(translated)) {
+      cacheSet(key, translated, TTL.TITLE);
+      return translated;
+    }
+    return title;
   } catch {
     return title;
   }

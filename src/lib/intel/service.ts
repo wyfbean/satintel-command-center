@@ -2,7 +2,7 @@ import { runMockBackendIngestion } from "@/lib/backend/mock-backend";
 import { sourceCatalog } from "@/lib/intel/catalog";
 import { generateBriefing, enrichItemSummary, translateTitle, isLlmConfigured } from "@/lib/intel/llm";
 import { listFeeds } from "@/lib/intel/rss-store";
-import { listArticles, countRecentArticles } from "@/lib/intel/article-store";
+import { listArticles, countRecentArticles, normalizeUrl } from "@/lib/intel/article-store";
 import { dedupeAndRank, extractTrendSignals, toIntelItem } from "@/lib/intel/scoring";
 import { RssAdapter } from "@/lib/intel/adapters/rss-adapter";
 import type { DashboardData, IntelItem, IntelSource } from "@/types/intel";
@@ -51,12 +51,23 @@ function storedToIntelItem(a: StoredArticle): IntelItem {
   };
 }
 
-/** Hot path: load articles from the SQLite DB (last 48 h). */
+/** Hot path: load articles from the SQLite DB (last 48 h), deduped by URL. */
 async function getDashboardDataFromDb(): Promise<IntelItem[]> {
   const since48h = Date.now() - 48 * 3600 * 1000;
   const stored = listArticles({ limit: 80, sinceMs: since48h });
   if (!stored.length) return [];
-  return stored.map(storedToIntelItem);
+
+  // Defensive read-time dedup: collapse rows sharing a canonical URL so the
+  // same article never renders twice (highest composite_score wins — listArticles
+  // already returns score-DESC, so the first occurrence is the keeper).
+  const seen = new Set<string>();
+  const unique = stored.filter((a) => {
+    const key = normalizeUrl(a.url) || a.title.toLowerCase().trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return unique.map(storedToIntelItem);
 }
 
 /** Cold-start fallback: live fetch from adapters (original pipeline). */

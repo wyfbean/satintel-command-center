@@ -92,6 +92,62 @@ const PURPOSE_TO_CATEGORY: Record<string, string> = {
   "Technology Development": "",
 };
 
+/** Human-readable Chinese label for a CSV purpose value (filter chips + detail). */
+function purposeZh(p: string): string {
+  const map: Record<string, string> = {
+    "Earth Observation": "对地观测",
+    "Communications": "通信",
+    "Navigation": "导航",
+    "Technology Development": "技术研发",
+    "Earth Science": "地球科学",
+    "Space Science": "空间科学",
+    "Meteorology": "气象",
+  };
+  return map[p] ?? p;
+}
+
+/** Human-readable Chinese label for a CSV users (operator type) value. */
+function usersZh(u: string): string {
+  const map: Record<string, string> = {
+    Commercial: "商业",
+    Government: "政府",
+    Military: "军事",
+    Civil: "民用",
+  };
+  return map[u] ?? u;
+}
+
+/**
+ * Chinese label for a CSV country/operator value. The CSV uses a bounded set of
+ * English country names; this dict covers the common ones. Unmapped tail values
+ * (rare multi-country combos) fall back to the original string.
+ */
+const COUNTRY_ZH: Record<string, string> = {
+  USA: "美国", "United States": "美国",
+  "United Kingdom": "英国", China: "中国", Russia: "俄罗斯", Japan: "日本",
+  Multinational: "多国", ESA: "欧空局", Canada: "加拿大", India: "印度",
+  Luxembourg: "卢森堡", Argentina: "阿根廷", Germany: "德国", France: "法国",
+  Israel: "以色列", Finland: "芬兰", Spain: "西班牙", Australia: "澳大利亚",
+  "South Korea": "韩国", Brazil: "巴西", Italy: "意大利", Turkey: "土耳其",
+  Netherlands: "荷兰", "United Arab Emirates": "阿联酋", Switzerland: "瑞士",
+  Taiwan: "中国台湾", "Saudi Arabia": "沙特阿拉伯", Norway: "挪威",
+  Singapore: "新加坡", Indonesia: "印度尼西亚", Mexico: "墨西哥", Egypt: "埃及",
+  Thailand: "泰国", Denmark: "丹麦", Kazakhstan: "哈萨克斯坦", Lithuania: "立陶宛",
+  Algeria: "阿尔及利亚", "South Africa": "南非", Poland: "波兰", Sweden: "瑞典",
+  Belgium: "比利时", Austria: "奥地利", Vietnam: "越南", Pakistan: "巴基斯坦",
+  Iran: "伊朗", Nigeria: "尼日利亚", Chile: "智利", Ukraine: "乌克兰",
+  Bolivia: "玻利维亚", Venezuela: "委内瑞拉", Peru: "秘鲁", Greece: "希腊",
+  Portugal: "葡萄牙", Ireland: "爱尔兰", "New Zealand": "新西兰",
+  Belarus: "白俄罗斯", Azerbaijan: "阿塞拜疆", Morocco: "摩洛哥",
+  Qatar: "卡塔尔", Malaysia: "马来西亚", Philippines: "菲律宾",
+  Bangladesh: "孟加拉国", Bulgaria: "保加利亚", Estonia: "爱沙尼亚",
+  "Czech Republic": "捷克", Hungary: "匈牙利", Romania: "罗马尼亚",
+  Unknown: "未知",
+};
+function countryZh(c: string): string {
+  return COUNTRY_ZH[c] ?? c;
+}
+
 /* ── main component ──────────────────────────────────────────────── */
 
 export function GlobeShell() {
@@ -121,7 +177,7 @@ export function GlobeShell() {
       if (orbitClass !== "全部"    && s.orbitClass !== orbitClass)    return false;
       if (purposeFilter !== "全部" && s.purpose   !== purposeFilter)  return false;
       if (usersFilter !== "全部"   && s.users     !== usersFilter)    return false;
-      if (q && !s.country.toLowerCase().includes(q))                  return false;
+      if (q && !s.country.toLowerCase().includes(q) && !countryZh(s.country).includes(q)) return false;
       return true;
     });
   }, [allCsvSats, orbitClass, purposeFilter, usersFilter, countrySearch]);
@@ -322,10 +378,7 @@ export function GlobeShell() {
                 <div className="flex flex-wrap gap-1.5">
                   {PURPOSES.map((p) => (
                     <Chip key={p}
-                      label={p === "全部" ? "全部" : p === "Earth Observation" ? "对地观测" :
-                        p === "Communications" ? "通信" : p === "Navigation" ? "导航" :
-                        p === "Technology Development" ? "技术研发" : p === "Earth Science" ? "地球科学" :
-                        p === "Space Science" ? "空间科学" : p === "Meteorology" ? "气象" : p}
+                      label={p === "全部" ? "全部" : purposeZh(p)}
                       active={purposeFilter === p}
                       onClick={() => setPurposeFilter(p)}
                     />
@@ -339,9 +392,7 @@ export function GlobeShell() {
                 <div className="flex flex-wrap gap-1.5">
                   {USER_TYPES.map((u) => (
                     <Chip key={u}
-                      label={u === "全部" ? "全部" : u === "Commercial" ? "商业" :
-                        u === "Government" ? "政府" : u === "Military" ? "军事" :
-                        u === "Civil" ? "民用" : u}
+                      label={u === "全部" ? "全部" : usersZh(u)}
                       active={usersFilter === u}
                       onClick={() => setUsersFilter(u)}
                       danger={u === "Military" && usersFilter === "Military"}
@@ -357,7 +408,7 @@ export function GlobeShell() {
                   type="text"
                   value={countrySearch}
                   onChange={(e) => setCountrySearch(e.target.value)}
-                  placeholder="输入国家名称（英文）"
+                  placeholder="输入国家名称（中 / 英）"
                   className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-[#3d74ff] focus:outline-none"
                 />
               </div>
@@ -385,7 +436,7 @@ export function GlobeShell() {
                         countrySearch === country ? "border-white/50 bg-white/15 text-white" : "border-white/15 text-slate-300 hover:bg-white/5"
                       }`}
                     >
-                      {country} <span className="text-slate-500">{cnt}</span>
+                      {countryZh(country)} <span className="text-slate-500">{cnt}</span>
                     </button>
                   ))}
                 </div>
@@ -404,8 +455,8 @@ export function GlobeShell() {
                     )}
                   </div>
                   <dl className="mt-3 space-y-1.5 text-xs">
-                    <Row k="国家 / 机构"     v={`${selected.country} · ${selected.agency}`} />
-                    <Row k="用途"            v={selected.purpose} />
+                    <Row k="国家 / 机构"     v={`${countryZh(selected.country)} · ${selected.agency}`} />
+                    <Row k="用途"            v={purposeZh(selected.purpose)} />
                     <Row k="轨道类型"        v={`${selected.orbitClass}${(selected as { orbitType?: string }).orbitType ? " / " + (selected as { orbitType?: string }).orbitType : ""}`} />
                     {selected.noradId && <Row k="NORAD ID" v={String(selected.noradId)} />}
                     {selected.launchYear && <Row k="发射年份" v={String(selected.launchYear)} />}
