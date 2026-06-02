@@ -84,19 +84,58 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
 
   const filteredItems = useMemo(() => {
     const q = deferredQuery.trim().toLowerCase();
-    return data.items.filter((item) => {
+    const filtered = data.items.filter((item) => {
       if (sourceFilter !== "全部" && item.sourceName !== sourceFilter) return false;
       if (regionFilter !== "全部" && item.region !== regionFilter) return false;
       if (langFilter !== "全部" && detectLang(item.title, item.body) !== langFilter) return false;
       if (q.length > 0 && !`${item.title} ${item.summary} ${item.tags.join(" ")}`.toLowerCase().includes(q)) return false;
       return true;
     });
+    // Always show newest articles first (time-progressing feed).
+    return [...filtered].sort(
+      (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),
+    );
   }, [data.items, deferredQuery, sourceFilter, regionFilter, langFilter]);
 
   const selectedItem = filteredItems.find((i) => i.id === selectedId) ?? filteredItems[0] ?? data.items[0];
   const activeIndex = Math.max(0, filteredItems.findIndex((i) => i.id === selectedItem?.id));
-  const visibleDateLabels = ["现在", data.dateTitle.slice(5), "5.22", "5.21", "5.20"];
   const { day, month, weekday } = todayParts();
+
+  /** Unique publication dates that appear in the current feed, newest first.
+   *  Each entry carries the id of the first article on that date so clicking
+   *  the label scrolls to the right place. */
+  const feedDates = useMemo(() => {
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`;
+    const seen = new Set<string>();
+    const result: Array<{ label: string; firstId: string; isToday: boolean }> = [];
+    for (const item of filteredItems) {
+      const d = new Date(item.publishedAt);
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        const isToday = key === todayKey;
+        const label = isToday
+          ? "今天"
+          : `${d.getMonth() + 1}/${d.getDate()}`;
+        result.push({ label, firstId: item.id, isToday });
+      }
+      if (result.length >= 5) break;
+    }
+    return result;
+  }, [filteredItems]);
+
+  /** Index in feedDates that matches the currently-visible article's date. */
+  const activeDateIndex = useMemo(() => {
+    if (!selectedItem) return 0;
+    const d = new Date(selectedItem.publishedAt);
+    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    const idx = feedDates.findIndex(({ firstId }) => {
+      const fd = new Date(filteredItems.find((i) => i.id === firstId)?.publishedAt ?? "");
+      return `${fd.getFullYear()}-${fd.getMonth()}-${fd.getDate()}` === key;
+    });
+    return idx < 0 ? 0 : idx;
+  }, [selectedItem, feedDates, filteredItems]);
 
   /* scroll tracking */
   useEffect(() => {
@@ -368,6 +407,7 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
             <div className="rounded-[28px] border border-[#ebedf2] bg-white p-5">
               <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">滑动索引</div>
               <div className="mt-4 flex items-start gap-4">
+                {/* progress track */}
                 <div className="relative h-48 w-px bg-[#e2e6ef]">
                   <div
                     className="absolute left-1/2 top-0 w-0.5 -translate-x-1/2 rounded-full bg-[#3d74ff] transition-all"
@@ -378,19 +418,25 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
                     style={{ top: `calc(${Math.min(1, scrollProgress) * 100}% - 6px)` }}
                   />
                 </div>
+                {/* date labels — derived from actual feed items, active label tracks viewport */}
                 <div className="space-y-5">
-                  {visibleDateLabels.map((label, index) => (
-                    <button
-                      key={label}
-                      type="button"
-                      onClick={() => { if (index < 2) scrollToItem(filteredItems[0]?.id ?? ""); }}
-                      className={`block text-left font-mono ${
-                        index < 2 ? "text-2xl font-semibold text-[#3d74ff]" : "text-lg text-slate-300"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                  {feedDates.map(({ label, firstId }, idx) => {
+                    const isActive = idx === activeDateIndex;
+                    return (
+                      <button
+                        key={firstId}
+                        type="button"
+                        onClick={() => scrollToItem(firstId)}
+                        className={`block text-left font-mono transition ${
+                          isActive
+                            ? "text-2xl font-semibold text-[#3d74ff]"
+                            : "text-lg text-slate-300 hover:text-slate-500"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
               <div className="mt-5 rounded-[18px] bg-[#f7f9ff] px-4 py-3 text-sm text-slate-500">
