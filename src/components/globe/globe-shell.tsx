@@ -54,34 +54,43 @@ const PURPOSES = [
 ];
 const USER_TYPES = ["全部", "Commercial", "Government", "Military", "Civil"];
 
-/* ── hook: CSV satellite loader ──────────────────────────────────── */
+/* ── hook: CSV satellite loader (fetch once, filter client-side) ──── */
 
-function useCsvSatellites(
-  orbitClass: string,
-  purpose: string,
-  users: string,
-  countrySearch: string,
-) {
-  const [data, setData] = useState<CsvSatellite[]>([]);
+function useCsvSatellites() {
+  const [all, setAll] = useState<CsvSatellite[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     setLoading(true);
-    const params = new URLSearchParams({ limit: "500" });
-    if (orbitClass !== "全部") params.set("orbit", orbitClass);
-    if (purpose !== "全部")    params.set("purpose", purpose);
-    if (users !== "全部")      params.set("users", users);
-    if (countrySearch.trim())  params.set("country", countrySearch.trim());
-
-    fetch(`/api/satellites?${params}`)
+    // Fetch a representative sample (no filters) once on mount.
+    // All filtering happens client-side so the count genuinely changes.
+    fetch("/api/satellites?limit=500")
       .then((r) => r.json())
-      .then((d: CsvSatellite[]) => setData(d))
+      .then((d: CsvSatellite[]) => setAll(d))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [orbitClass, purpose, users, countrySearch]);
+  }, []); // intentionally empty — load once
 
-  return { data, loading };
+  return { all, loading };
 }
+
+/** Derive orbit class from mean motion (rev/day). */
+function flagshipOrbitClass(mm: number): "LEO" | "MEO" | "GEO" {
+  if (mm > 5)   return "LEO";
+  if (mm > 1.1) return "MEO";
+  return "GEO";
+}
+
+/** Map CSV purpose (English) to flagship category (Chinese). */
+const PURPOSE_TO_CATEGORY: Record<string, string> = {
+  "Earth Observation":      "对地观测",
+  "Communications":         "通信",
+  "Navigation":             "导航",
+  "Space Science":          "科学",
+  "Earth Science":          "科学",
+  "Meteorology":            "气象",
+  "Technology Development": "",
+};
 
 /* ── main component ──────────────────────────────────────────────── */
 
@@ -98,9 +107,47 @@ export function GlobeShell() {
   const [countrySearch, setCountrySearch] = useState("");
   const [showFlagships, setShowFlagships] = useState(true);
 
-  const { data: csvSats, loading } = useCsvSatellites(
-    orbitClass, purposeFilter, usersFilter, countrySearch,
-  );
+  const { all: allCsvSats, loading } = useCsvSatellites();
+
+  // ── Client-side filtering ──────────────────────────────────────────
+  // Filtering happens here (not in the API) so the count genuinely
+  // changes — if the API sampled 500 items, filtering LEO vs GEO vs "全部"
+  // would all return 500 (same count). Filtering the local 500-item
+  // representative sample gives proportional subsets.
+
+  const csvSats = useMemo(() => {
+    const q = countrySearch.trim().toLowerCase();
+    return allCsvSats.filter((s) => {
+      if (orbitClass !== "全部"    && s.orbitClass !== orbitClass)    return false;
+      if (purposeFilter !== "全部" && s.purpose   !== purposeFilter)  return false;
+      if (usersFilter !== "全部"   && s.users     !== usersFilter)    return false;
+      if (q && !s.country.toLowerCase().includes(q))                  return false;
+      return true;
+    });
+  }, [allCsvSats, orbitClass, purposeFilter, usersFilter, countrySearch]);
+
+  // Filter flagship catalog by the same active filters.
+  const filteredFlagships = useMemo(() => {
+    if (!showFlagships) return [];
+    const q = countrySearch.trim().toLowerCase();
+    const purposeCat = purposeFilter !== "全部" ? PURPOSE_TO_CATEGORY[purposeFilter] : null;
+    return satelliteCatalog.filter((sat) => {
+      if (orbitClass !== "全部") {
+        const oc = flagshipOrbitClass(sat.orbit.meanMotionRevPerDay);
+        if (oc !== orbitClass) return false;
+      }
+      // purposeCat is "" for "Technology Development" → no flagship matches → hide
+      if (purposeCat !== null) {
+        if (!purposeCat) return false;
+        if ((sat as unknown as { category: string }).category !== purposeCat) return false;
+      }
+      if (q && !sat.country.toLowerCase().includes(q)) return false;
+      // usersFilter: flagship catalog has no users field — hide when filtering
+      // to "Commercial" (flagships are government/civil), but keep for others.
+      if (usersFilter === "Commercial") return false;
+      return true;
+    });
+  }, [showFlagships, orbitClass, purposeFilter, usersFilter, countrySearch]);
 
   // Parse TLEs once — stable across ticks. Re-parse only when data changes.
   const satrecs = useMemo(() => {
@@ -108,11 +155,11 @@ export function GlobeShell() {
     for (const sat of satelliteCatalog) {
       map.set(sat.id, satellite.twoline2satrec(sat.tle.line1, sat.tle.line2));
     }
-    for (const sat of csvSats) {
+    for (const sat of allCsvSats) {
       map.set(sat.id, satellite.twoline2satrec(sat.tle.line1, sat.tle.line2));
     }
     return map;
-  }, [csvSats]);
+  }, [allCsvSats]);   // parse all TLEs once; filtering doesn't need reparsing
 
   useEffect(() => {
     // Slower tick for large sets to keep GPU happy.
@@ -148,16 +195,14 @@ export function GlobeShell() {
 
     const result: GlobeSat[] = [];
 
-    // Flagship satellites: always shown (unless user hid them).
-    if (showFlagships) {
-      for (const sat of satelliteCatalog) {
-        const pos = propagate(sat.id);
-        if (!pos) continue;
-        result.push({ ...sat, ...pos, flagship: true } as unknown as GlobeSat);
-      }
+    // Flagship satellites: filtered by the active filter set.
+    for (const sat of filteredFlagships) {
+      const pos = propagate(sat.id);
+      if (!pos) continue;
+      result.push({ ...sat, ...pos, flagship: true } as unknown as GlobeSat);
     }
 
-    // CSV satellites.
+    // CSV satellites (already filtered client-side).
     for (const sat of csvSats) {
       const pos = propagate(sat.id);
       if (!pos) continue;
@@ -166,7 +211,7 @@ export function GlobeShell() {
 
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick, satrecs, showFlagships, csvSats]);
+  }, [tick, satrecs, filteredFlagships, csvSats]);
 
   const selected = useMemo(
     () => liveSats.find((s) => s.id === selectedId) ?? null,
@@ -198,9 +243,12 @@ export function GlobeShell() {
     return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 15);
   }, [csvSats]);
 
-  const totalVisible = liveSats.length;
-  const csvVisible   = liveSats.filter((s) => !s.flagship).length;
+  const totalVisible    = liveSats.length;
+  const csvVisible      = liveSats.filter((s) => !s.flagship).length;
   const flagshipVisible = liveSats.filter((s) => s.flagship).length;
+  const hasActiveFilter =
+    orbitClass !== "全部" || purposeFilter !== "全部" ||
+    usersFilter !== "全部" || countrySearch.trim().length > 0;
 
   return (
     <main className="min-h-screen bg-[#05070f] px-4 py-6 text-slate-100 sm:px-6 lg:px-8">
@@ -212,7 +260,12 @@ export function GlobeShell() {
             <div>
               <div className="text-sm font-semibold text-white">全球卫星 3D 星图</div>
               <div className="mt-0.5 text-xs text-slate-400">
-                {loading ? "加载中…" : `${totalVisible} 颗可见（${csvVisible} 条 CSV · ${flagshipVisible} 旗舰）`}
+                {loading
+                  ? "加载中…"
+                  : hasActiveFilter
+                    ? `筛选结果：${totalVisible} 颗（${csvVisible} CSV · ${flagshipVisible} 旗舰），样本共 ${allCsvSats.length + satelliteCatalog.length} 颗`
+                    : `${totalVisible} 颗可见（${csvVisible} CSV · ${flagshipVisible} 旗舰）`
+                }
                 {" · "}react-globe.gl · satellite.js SGP4
               </div>
             </div>
