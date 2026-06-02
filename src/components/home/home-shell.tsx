@@ -27,8 +27,11 @@ function toAgentState(d: DashboardData): DashboardAgentState {
     trends: d.trends,
     sourceSummary: d.sourceSummary,
     briefing: d.briefing,
+    appliedSource: null,
   };
 }
+
+const RESET_RE = /全部|所有|重置|清除|取消筛选|reset|clear|^all$/i;
 
 /* ── public export ────────────────────────────────────────────────── */
 
@@ -73,6 +76,11 @@ function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
     description: "按来源名称筛选下方的资讯流。",
     parameters: [{ name: "source", type: "string", description: "要筛选的来源名称", required: true }],
     handler: ({ source }: { source: string }) => {
+      // The agent emits "全部"/empty to clear — never let .includes("") match all.
+      if (!source || RESET_RE.test(source)) {
+        setActiveSource(null);
+        return;
+      }
       const matched = sources.find((n) => n === source || n.includes(source));
       setActiveSource(matched ?? null);
     },

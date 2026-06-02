@@ -3,6 +3,7 @@ import { Observable } from "rxjs";
 
 import { generateChatAnswer } from "@/lib/intel/llm";
 import { getDashboardData } from "@/lib/intel/service";
+import { extractTrendSignals } from "@/lib/intel/scoring";
 import type { ChatMessage, DashboardData } from "@/types/intel";
 
 /**
@@ -29,22 +30,29 @@ export class SatelliteDashboardAgent extends AbstractAgent {
         emit({ type: EventType.RUN_STARTED, threadId, runId } as BaseEvent);
 
         const dashboard = await getDashboardData();
-        emit({ type: EventType.STATE_SNAPSHOT, snapshot: toDashboardSnapshot(dashboard) } as BaseEvent);
-
         const messages = extractChatMessages(input);
         const latestUser = [...messages].reverse().find((message) => message.role === "user");
 
-        // If the user names a source and the page exposed a `filterBySource`
-        // frontend action, drive it — a real CopilotKit frontend-action loop.
-        if (latestUser) {
-          const source = matchSource(dashboard, latestUser.content);
-          const hasFilterTool = (input.tools ?? []).some((tool) => tool.name === "filterBySource");
-          if (source && hasFilterTool) {
-            const toolCallId = `call-filter-${runId}`;
-            emit({ type: EventType.TOOL_CALL_START, toolCallId, toolCallName: "filterBySource" } as BaseEvent);
-            emit({ type: EventType.TOOL_CALL_ARGS, toolCallId, delta: JSON.stringify({ source }) } as BaseEvent);
-            emit({ type: EventType.TOOL_CALL_END, toolCallId } as BaseEvent);
-          }
+        // Resolve the active source filter from the latest message, preserving
+        // any prior filter (carried in the agent state) when the user neither
+        // names a new source nor asks to reset.
+        const priorState = input.state as DashboardAgentState | undefined;
+        const appliedSource = resolveFilter(dashboard, latestUser?.content, priorState?.appliedSource ?? null);
+
+        // The snapshot reflects the filter, so the top dashboard (KPIs / trends /
+        // briefing) is genuinely chat-driven — not just the feed below it.
+        const view = appliedSource ? filterDashboard(dashboard, appliedSource) : dashboard;
+        emit({ type: EventType.STATE_SNAPSHOT, snapshot: toDashboardSnapshot(view, appliedSource) } as BaseEvent);
+
+        // Keep the feed below in sync via the `filterBySource` frontend action
+        // (CopilotKit frontend-action loop). Emitted every run so the feed and
+        // the hero never drift apart.
+        const hasFilterTool = (input.tools ?? []).some((tool) => tool.name === "filterBySource");
+        if (hasFilterTool) {
+          const toolCallId = `call-filter-${runId}`;
+          emit({ type: EventType.TOOL_CALL_START, toolCallId, toolCallName: "filterBySource" } as BaseEvent);
+          emit({ type: EventType.TOOL_CALL_ARGS, toolCallId, delta: JSON.stringify({ source: appliedSource ?? "全部" }) } as BaseEvent);
+          emit({ type: EventType.TOOL_CALL_END, toolCallId } as BaseEvent);
         }
 
         const messageId = `msg-${runId}`;
@@ -93,9 +101,11 @@ export type DashboardAgentState = {
   trends: DashboardData["trends"];
   sourceSummary: DashboardData["sourceSummary"];
   briefing: DashboardData["briefing"];
+  /** Source filter currently applied by chat (null = all sources). */
+  appliedSource: string | null;
 };
 
-function toDashboardSnapshot(dashboard: DashboardData): DashboardAgentState {
+function toDashboardSnapshot(dashboard: DashboardData, appliedSource: string | null = null): DashboardAgentState {
   return {
     generatedAt: dashboard.generatedAt,
     llmConfigured: dashboard.sourceSummary.llmConfigured,
@@ -103,6 +113,37 @@ function toDashboardSnapshot(dashboard: DashboardData): DashboardAgentState {
     trends: dashboard.trends,
     sourceSummary: dashboard.sourceSummary,
     briefing: dashboard.briefing,
+    appliedSource,
+  };
+}
+
+const RESET_RE = /全部|所有|重置|清除|取消筛选|reset|clear|^all$/i;
+
+/**
+ * Decide the source filter for this turn: a newly named source wins; an
+ * explicit reset clears it; otherwise the prior filter is preserved so that
+ * unrelated follow-up questions don't silently drop the active view.
+ */
+function resolveFilter(dashboard: DashboardData, message: string | undefined, prior: string | null): string | null {
+  if (!message) return prior;
+  const named = matchSource(dashboard, message);
+  if (named) return named;
+  if (RESET_RE.test(message)) return null;
+  return prior;
+}
+
+/** Narrow the dashboard to a single source and recompute the derived signals. */
+function filterDashboard(dashboard: DashboardData, source: string): DashboardData {
+  const items = dashboard.items.filter((item) => item.sourceName === source);
+  return {
+    ...dashboard,
+    items,
+    trends: extractTrendSignals(items),
+    sourceSummary: {
+      ...dashboard.sourceSummary,
+      totalItems: items.length,
+      liveSources: items.length ? 1 : 0,
+    },
   };
 }
 

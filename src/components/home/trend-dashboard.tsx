@@ -38,7 +38,14 @@ export function TrendDashboard({ state }: Props) {
       <div className="flex items-end justify-between gap-3">
         <div>
           <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">今日趋势</div>
-          <h2 className="mt-1.5 text-2xl font-semibold text-slate-900">智能体数据面板</h2>
+          <h2 className="mt-1.5 flex items-center gap-2 text-2xl font-semibold text-slate-900">
+            智能体数据面板
+            {state.appliedSource && (
+              <span className="rounded-full bg-[#eef4ff] px-2.5 py-1 text-xs font-medium text-[#2a55cc]">
+                聊天筛选：{state.appliedSource}
+              </span>
+            )}
+          </h2>
         </div>
         <div className="flex items-center gap-1.5 text-xs text-slate-400">
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#22c55e]" />
