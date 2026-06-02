@@ -76,10 +76,17 @@ export function getDb(): Db | null {
     `);
 
     // Migrate pre-existing DBs that lack the image column (idempotent).
-    const hasImage = (db.prepare("PRAGMA table_info(articles)").all() as Array<{ name: string }>)
-      .some((c) => c.name === "image");
-    if (!hasImage) {
+    const cols = (db.prepare("PRAGMA table_info(articles)").all() as Array<{ name: string }>).map((c) => c.name);
+    if (!cols.includes("image")) {
       db.exec("ALTER TABLE articles ADD COLUMN image TEXT NOT NULL DEFAULT ''");
+    }
+    // `enriched` flags rows whose title/summary have been LLM-processed, so the
+    // async enrichment pass (ingestion-worker) can skip them. Existing rows that
+    // already carry a Chinese title are marked enriched so they aren't reprocessed;
+    // rows whose translation never landed (title_zh empty or == title) stay 0 to retry.
+    if (!cols.includes("enriched")) {
+      db.exec("ALTER TABLE articles ADD COLUMN enriched INTEGER NOT NULL DEFAULT 0");
+      db.exec("UPDATE articles SET enriched = 1 WHERE channel = 'mock' OR (title_zh != '' AND title_zh != title)");
     }
 
     // ── Ingestion run log ────────────────────────────────────────────────

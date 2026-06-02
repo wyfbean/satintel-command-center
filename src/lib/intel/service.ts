@@ -51,10 +51,16 @@ function storedToIntelItem(a: StoredArticle): IntelItem {
   };
 }
 
-/** Hot path: load articles from the SQLite DB (last 48 h), deduped by URL. */
+/**
+ * Hot path: load articles from the SQLite DB, deduped by URL. The window is
+ * deliberately wide (7 days, up to 200 items) so the client receives a rich
+ * candidate pool — composite_score (freshness-weighted) keeps recent items on
+ * top, and a later recommendation model can re-rank the full set. The frontend
+ * paginates this list, so a larger array doesn't change rendering logic.
+ */
 async function getDashboardDataFromDb(): Promise<IntelItem[]> {
-  const since48h = Date.now() - 48 * 3600 * 1000;
-  const stored = listArticles({ limit: 80, sinceMs: since48h });
+  const since7d = Date.now() - 7 * 24 * 3600 * 1000;
+  const stored = listArticles({ limit: 200, sinceMs: since7d });
   if (!stored.length) return [];
 
   // Defensive read-time dedup: collapse rows sharing a canonical URL so the

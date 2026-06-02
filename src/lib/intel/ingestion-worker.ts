@@ -1,9 +1,13 @@
 /**
- * Single ingestion cycle: collect → translate titles → score → LLM-enrich → upsert.
+ * Single ingestion cycle, two phases:
+ *   A. collect → dedupe/score → upsert raw FAST (heuristic summary, no LLM)
+ *   B. async enrichment: translate title + LLM summary for a capped batch of
+ *      not-yet-enriched rows (highest composite_score first).
  *
- * Called by the scheduler on a timer and also by POST /api/crawl/trigger.
- * All results are written to the articles SQLite table so subsequent
- * getDashboardData() calls read from the DB instead of re-fetching the network.
+ * Decoupling enrichment from storage keeps the cycle bounded regardless of how
+ * many sources/items are fetched: raw data lands immediately, and Chinese
+ * titles / AI summaries fill in across ticks. Called by the scheduler and by
+ * POST /api/crawl/trigger. All results go to the articles SQLite table.
  */
 
 import { runMockBackendIngestion } from "@/lib/backend/mock-backend";
@@ -15,19 +19,19 @@ import {
   logRunEnd,
   pruneOldArticles,
   dedupeByUrl,
-  listUntranslatedArticles,
-  updateTitleZh,
+  listUnenrichedArticles,
+  markEnriched,
 } from "@/lib/intel/article-store";
 import { translateTitle, enrichItemSummary, isLlmConfigured } from "@/lib/intel/llm";
-import { dedupeAndRank } from "@/lib/intel/scoring";
+import { dedupeAndRank, toIntelItem } from "@/lib/intel/scoring";
 import type { IntelSource, RawIntelRecord } from "@/types/intel";
 
 const rssAdapter = new RssAdapter();
 
 /** Translation/enrichment concurrency — keeps bursts off the LLM endpoint. */
 const LLM_CONCURRENCY = 4;
-/** Re-translate at most this many stale rows per cycle (LLM cost control). */
-const BACKFILL_PER_CYCLE = 15;
+/** Enrich at most this many not-yet-enriched rows per cycle (LLM cost control). */
+const ENRICH_PER_CYCLE = 40;
 
 /** Map with a bounded concurrency window (preserves input order). */
 async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
@@ -44,24 +48,27 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: num
 }
 
 /**
- * Re-translate stored articles whose Chinese title never landed (title_zh empty
- * or still equal to the English original). Runs every cycle but is capped and
- * no-ops without an LLM so the deterministic fallback path stays intact.
- * Uses bypassCache so a previously poisoned cache entry can't block the fix.
+ * Phase B — async enrichment. Translates titles and generates AI summaries for
+ * a capped batch of stored rows that haven't been enriched yet, newest/highest
+ * score first. No-ops without an LLM so the deterministic fallback path (and the
+ * heuristic summary already stored in Phase A) stays intact.
  */
-async function backfillTranslations(): Promise<number> {
+async function enrichPending(): Promise<number> {
   if (!isLlmConfigured()) return 0;
-  const stale = listUntranslatedArticles(BACKFILL_PER_CYCLE);
-  if (!stale.length) return 0;
-  let fixed = 0;
-  await mapPool(stale, LLM_CONCURRENCY, async (a) => {
-    const zh = await translateTitle(a.title, a.body, { bypassCache: true });
-    if (zh && zh !== a.title) {
-      updateTitleZh(a.id, zh);
-      fixed++;
-    }
+  const pending = listUnenrichedArticles(ENRICH_PER_CYCLE);
+  if (!pending.length) return 0;
+  let done = 0;
+  await mapPool(pending, LLM_CONCURRENCY, async (a) => {
+    const titleZh = await translateTitle(a.title, a.body);
+    const enriched = await enrichItemSummary(toIntelItem(a));
+    markEnriched(a.id, {
+      titleZh: titleZh && titleZh !== a.title ? titleZh : a.titleZh || a.title,
+      summary: enriched.summary,
+      whyItMatters: enriched.whyItMatters,
+    });
+    done++;
   });
-  return fixed;
+  return done;
 }
 
 async function collectUserRssFeeds(): Promise<RawIntelRecord[]> {
@@ -109,19 +116,10 @@ export async function runIngestionCycle(): Promise<IngestionResult> {
     // 2. Dedupe + score (needed for composite_score in DB)
     const ranked = dedupeAndRank(raw);
 
-    // 3. Translate titles + LLM-enrich top items (capped to 12 to limit spend).
-    //    A bounded concurrency window avoids bursting the LLM endpoint (which
-    //    previously caused many translations to fail and fall back to English).
-    const enriched = await mapPool(ranked, LLM_CONCURRENCY, async (item, i) => {
-      const titleZh = await translateTitle(item.title, item.body);
-      // Only call enrichItemSummary for top 12 (LLM cost control)
-      const enrichedItem = i < 12 ? await enrichItemSummary(item) : item;
-      return { item: enrichedItem, titleZh };
-    });
-
-    // 4. Upsert every item into the articles table
+    // 3. Phase A — upsert every item raw and FAST (heuristic summary, no LLM).
+    //    Enrichment fields are preserved across unchanged re-crawls by upsertArticle.
     let itemsNew = 0;
-    for (const { item, titleZh } of enriched) {
+    for (const item of ranked) {
       const isNew = upsertArticle({
         record: {
           id: item.id,
@@ -138,7 +136,7 @@ export async function runIngestionCycle(): Promise<IngestionResult> {
           imageryModes: item.imageryModes,
           image: item.image,
         },
-        titleZh,
+        titleZh: "",
         summary: item.summary,
         whyItMatters: item.whyItMatters,
         compositeScore: item.compositeScore,
@@ -146,9 +144,10 @@ export async function runIngestionCycle(): Promise<IngestionResult> {
       if (isNew) itemsNew++;
     }
 
-    // 5. Backfill stale rows whose translation never landed, then collapse any
-    //    duplicate URLs (e.g. left over from an older id scheme).
-    const backfilled = await backfillTranslations();
+    // 4. Phase B — async enrichment (translate + AI summary), capped & score-desc.
+    const enriched = await enrichPending();
+
+    // 5. Collapse any duplicate URLs (e.g. left over from an older id scheme).
     const dropped = dedupeByUrl();
 
     // 6. Retention cleanup — keep the long history as a retrieval corpus.
@@ -159,8 +158,8 @@ export async function runIngestionCycle(): Promise<IngestionResult> {
       itemsNew,
       durationMs: Date.now() - startedAt,
     };
-    if (backfilled || dropped) {
-      console.log(`[ingestion] backfilled ${backfilled} titles, deduped ${dropped} rows`);
+    if (enriched || dropped) {
+      console.log(`[ingestion] enriched ${enriched} rows, deduped ${dropped} rows`);
     }
     logRunEnd(runId, result.itemsIn, result.itemsNew);
     return result;

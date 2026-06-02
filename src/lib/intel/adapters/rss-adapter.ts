@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { XMLParser } from "fast-xml-parser";
 
 import type { SourceAdapter } from "@/lib/intel/adapters/base";
+import { rssItemLimit } from "@/lib/intel/catalog";
 import type { IntelSource, RawIntelRecord } from "@/types/intel";
 
 function stripHtml(input: string) {
@@ -88,7 +89,7 @@ export class RssAdapter implements SourceAdapter {
     const feed = parser.parse(xml);
     const channelItems = normalizeItems(feed?.rss?.channel?.item ?? feed?.feed?.entry);
 
-    return channelItems.slice(0, 20).map((item: Record<string, unknown>) => {
+    return channelItems.slice(0, rssItemLimit).map((item: Record<string, unknown>) => {
       const title = String(item.title ?? "Untitled signal");
       const rawSummary =
         String(item.description ?? item.summary ?? item["content:encoded"] ?? "") ||

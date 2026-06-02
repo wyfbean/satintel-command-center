@@ -17,6 +17,7 @@ export type StoredArticle = RawIntelRecord & {
   whyItMatters: string;
   crawledAt: number;
   compositeScore: number;
+  enriched: number;
 };
 
 type DbRow = {
@@ -38,6 +39,7 @@ type DbRow = {
   imagery_modes: string;
   composite_score: number;
   image: string;
+  enriched: number;
 };
 
 function rowToArticle(r: DbRow): StoredArticle {
@@ -62,6 +64,7 @@ function rowToArticle(r: DbRow): StoredArticle {
       : ["RGB"]) as Array<"RGB" | "SAR" | "MS">,
     compositeScore: r.composite_score,
     image: r.image || undefined,
+    enriched: r.enriched ?? 0,
   };
 }
 
@@ -73,31 +76,47 @@ export type UpsertPayload = {
   compositeScore: number;
 };
 
-/** Insert or update a single article. Returns true if it was newly inserted. */
+/**
+ * Insert or update a single article. Returns true if it was newly inserted.
+ *
+ * LLM enrichment (title_zh / summary / why_it_matters / enriched) is *preserved*
+ * across an unchanged re-crawl so the async enrichment pass doesn't get undone
+ * and identical articles aren't re-sent to the LLM. The volatile composite_score
+ * is always refreshed (freshness decays with time), and a changed body resets
+ * enrichment back to 0 so the new content is re-processed.
+ */
 export function upsertArticle(p: UpsertPayload): boolean {
   const db = getDb();
   if (!db) return false;
   const existing = db
-    .prepare("SELECT id FROM articles WHERE id = ?")
-    .get(p.record.id) as { id: string } | undefined;
+    .prepare("SELECT body, title_zh, summary, why_it_matters, enriched FROM articles WHERE id = ?")
+    .get(p.record.id) as
+    | { body: string; title_zh: string; summary: string; why_it_matters: string; enriched: number }
+    | undefined;
+
+  const bodyChanged = !existing || existing.body !== p.record.body;
+  const titleZh = bodyChanged ? p.titleZh : existing!.title_zh || p.titleZh;
+  const summary = bodyChanged ? p.summary : existing!.summary || p.summary;
+  const whyItMatters = bodyChanged ? p.whyItMatters : existing!.why_it_matters || p.whyItMatters;
+  const enriched = bodyChanged ? 0 : existing!.enriched;
 
   db.prepare(`
     INSERT OR REPLACE INTO articles
       (id, source_id, source_name, channel, title, title_zh, excerpt, body, url,
-       summary, why_it_matters, published_at, crawled_at, tags, region, imagery_modes, composite_score, image)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       summary, why_it_matters, published_at, crawled_at, tags, region, imagery_modes, composite_score, image, enriched)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     p.record.id,
     p.record.sourceId,
     p.record.sourceName,
     p.record.channel,
     p.record.title,
-    p.titleZh,
+    titleZh,
     p.record.excerpt,
     p.record.body,
     p.record.url,
-    p.summary,
-    p.whyItMatters,
+    summary,
+    whyItMatters,
     p.record.publishedAt,
     Date.now(),
     p.record.tags.join(","),
@@ -105,6 +124,7 @@ export function upsertArticle(p: UpsertPayload): boolean {
     p.record.imageryModes.join(","),
     p.compositeScore,
     p.record.image ?? "",
+    enriched,
   );
   return !existing;
 }
@@ -126,27 +146,31 @@ export function normalizeUrl(raw: string): string {
   }
 }
 
-/** Update only the Chinese title of an existing article (used by the backfill). */
-export function updateTitleZh(id: string, titleZh: string): void {
+/** Mark an article enriched and store its LLM title / summary / why. */
+export function markEnriched(
+  id: string,
+  fields: { titleZh: string; summary: string; whyItMatters: string },
+): void {
   const db = getDb();
   if (!db) return;
-  db.prepare("UPDATE articles SET title_zh = ? WHERE id = ?").run(titleZh, id);
+  db.prepare(
+    "UPDATE articles SET title_zh = ?, summary = ?, why_it_matters = ?, enriched = 1 WHERE id = ?",
+  ).run(fields.titleZh, fields.summary, fields.whyItMatters, id);
 }
 
 /**
- * Articles whose Chinese title is missing or identical to the source title
- * (i.e. translation never succeeded). Excludes mock seeds (already Chinese).
- * Used by the translation backfill so stale rows get fixed even after they
- * drop out of the live feed window.
+ * Articles awaiting async LLM enrichment (title translation + summary), highest
+ * composite_score first so the most-visible items become Chinese soonest.
+ * Excludes mock seeds (already curated Chinese).
  */
-export function listUntranslatedArticles(limit = 20): StoredArticle[] {
+export function listUnenrichedArticles(limit = 40): StoredArticle[] {
   const db = getDb();
   if (!db) return [];
   const rows = db
     .prepare(
       `SELECT * FROM articles
-       WHERE channel != 'mock' AND (title_zh = '' OR title_zh = title)
-       ORDER BY crawled_at DESC LIMIT ?`,
+       WHERE channel != 'mock' AND enriched = 0
+       ORDER BY composite_score DESC, crawled_at DESC LIMIT ?`,
     )
     .all(limit) as DbRow[];
   return rows.map(rowToArticle);
