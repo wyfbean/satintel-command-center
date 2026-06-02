@@ -68,11 +68,19 @@ export function getDb(): Db | null {
         tags            TEXT NOT NULL DEFAULT '',
         region          TEXT NOT NULL DEFAULT '',
         imagery_modes   TEXT NOT NULL DEFAULT '',
-        composite_score REAL NOT NULL DEFAULT 0
+        composite_score REAL NOT NULL DEFAULT 0,
+        image           TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS articles_crawled ON articles(crawled_at DESC);
       CREATE INDEX IF NOT EXISTS articles_channel  ON articles(channel);
     `);
+
+    // Migrate pre-existing DBs that lack the image column (idempotent).
+    const hasImage = (db.prepare("PRAGMA table_info(articles)").all() as Array<{ name: string }>)
+      .some((c) => c.name === "image");
+    if (!hasImage) {
+      db.exec("ALTER TABLE articles ADD COLUMN image TEXT NOT NULL DEFAULT ''");
+    }
 
     // ── Ingestion run log ────────────────────────────────────────────────
     db.exec(`

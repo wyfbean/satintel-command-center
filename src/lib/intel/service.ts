@@ -30,6 +30,7 @@ function storedToIntelItem(a: StoredArticle): IntelItem {
     tags: a.tags,
     region: a.region,
     imageryModes: a.imageryModes,
+    image: a.image,
     // Enriched fields from ingestion
     summary: a.summary,
     whyItMatters: a.whyItMatters,

@@ -39,24 +39,8 @@ export const sourceCatalog: IntelSource[] = [
     tags: ["任务", "科研", "EO"],
     url: rssSources[1],
   },
-  {
-    id: "public-crawl-watchlist",
-    kind: "crawl",
-    name: "公开网页抓取列表",
-    region: "混合",
-    reliabilityScore: 0.76,
-    tags: ["抓取", "产业", "政务"],
-    urls: crawlUrls,
-  },
-  {
-    id: "wechat-watchlist",
-    kind: "wechat-url",
-    name: "微信观察列表",
-    region: "中国",
-    reliabilityScore: 0.78,
-    tags: ["微信", "产业", "政务"],
-    urls: wechatUrls,
-  },
+  // NOTE: crawl / wechat-url / ai-generated sources are temporarily unwired
+  // (RSS-only mode). The adapter code is kept; re-add entries here to restore.
   {
     id: "seed-satellite-lab",
     kind: "mock",
@@ -64,13 +48,5 @@ export const sourceCatalog: IntelSource[] = [
     region: "混合",
     reliabilityScore: 0.7,
     tags: ["种子", "卫星"],
-  },
-  {
-    id: "ai-intel-generator",
-    kind: "ai-generated",
-    name: "AI 情报生成",
-    region: "全球",
-    reliabilityScore: 0.75,
-    tags: ["AI", "卫星", "遥感"],
   },
 ];

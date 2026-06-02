@@ -2,10 +2,10 @@
 
 import { SiteNav } from "@/components/site-nav";
 import { RssManager } from "@/components/dashboard/rss-manager";
-import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import { ChatPanel } from "@/components/dashboard/chat-panel";
-import { FeedCard } from "@/components/dashboard/feed-card";
+import { FeedCard, cardGradient } from "@/components/dashboard/feed-card";
 import { frontendMockDashboardData } from "@/lib/mock/frontend-dashboard";
 import type { BriefingSection, DashboardData } from "@/types/intel";
 
@@ -42,14 +42,6 @@ function formatFullDate(isoString: string) {
   }).format(new Date(isoString));
 }
 
-const CJK_RE = /[一-鿿㐀-䶿＀-￯]/;
-function detectLang(title: string, body: string): "中文" | "英文" {
-  const sample = (title + " " + body).replace(/\s/g, "");
-  if (!sample) return "英文";
-  const cjk = [...sample].filter((c) => CJK_RE.test(c)).length;
-  return cjk / sample.length > 0.1 ? "中文" : "英文";
-}
-
 function todayParts() {
   const now = new Date();
   const day = now.getDate();
@@ -58,6 +50,12 @@ function todayParts() {
   const month = now.getMonth() + 1;
   return { day, month, weekday };
 }
+
+/* ── category strip ─────────────────────────────────────────────────── */
+
+type Category = { key: string; label: string; dim: "all" | "tag" | "source" | "region"; value?: string };
+
+const PAGE_SIZE = 24;
 
 /* ── types ─────────────────────────────────────────────────────────── */
 
@@ -69,116 +67,69 @@ const useFrontendMock = process.env.NEXT_PUBLIC_FEED_MODE === "mock";
 export function DashboardShell({ initialData }: DashboardShellProps) {
   const bootData = useFrontendMock ? frontendMockDashboardData : initialData;
   const [data, setData] = useState(bootData);
-  const [selectedId, setSelectedId] = useState(bootData.items[0]?.id ?? "");
-  const [sourceFilter, setSourceFilter] = useState<string>("全部");
-  const [regionFilter, setRegionFilter] = useState<string>("全部");
-  const [langFilter, setLangFilter] = useState<"全部" | "中文" | "英文">("全部");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [activeCatKey, setActiveCatKey] = useState("all");
   const [query, setQuery] = useState("");
   const [briefing, setBriefing] = useState<BriefingSection[]>(bootData.briefing);
-  const [scrollProgress, setScrollProgress] = useState(0);
   const [isPending, startTransition] = useTransition();
-  const deferredQuery = useDeferredValue(query);
-  const feedNodeMap = useRef(new Map<string, HTMLElement>());
-  const scrollFrameRef = useRef<number | null>(null);
   const [rssOpen, setRssOpen] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  /** Columns combine tags + sources + regions into one selectable strip. */
+  const categories = useMemo<Category[]>(() => {
+    const cats: Category[] = [{ key: "all", label: "全部", dim: "all" }];
+    for (const t of data.filters.tags) cats.push({ key: `tag:${t}`, label: t, dim: "tag", value: t });
+    for (const s of data.filters.sources) cats.push({ key: `source:${s}`, label: s, dim: "source", value: s });
+    for (const r of data.filters.regions ?? []) cats.push({ key: `region:${r}`, label: r, dim: "region", value: r });
+    return cats;
+  }, [data.filters]);
+
+  const activeCat = categories.find((c) => c.key === activeCatKey) ?? categories[0];
 
   const filteredItems = useMemo(() => {
-    const q = deferredQuery.trim().toLowerCase();
+    const q = query.trim().toLowerCase();
     const filtered = data.items.filter((item) => {
-      if (sourceFilter !== "全部" && item.sourceName !== sourceFilter) return false;
-      if (regionFilter !== "全部" && item.region !== regionFilter) return false;
-      if (langFilter !== "全部" && detectLang(item.title, item.body) !== langFilter) return false;
+      if (activeCat.dim === "tag" && !item.tags.includes(activeCat.value!)) return false;
+      if (activeCat.dim === "source" && item.sourceName !== activeCat.value) return false;
+      if (activeCat.dim === "region" && item.region !== activeCat.value) return false;
       if (q.length > 0 && !`${item.title} ${item.summary} ${item.tags.join(" ")}`.toLowerCase().includes(q)) return false;
       return true;
     });
-    // Always show newest articles first (time-progressing feed).
-    return [...filtered].sort(
-      (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),
-    );
-  }, [data.items, deferredQuery, sourceFilter, regionFilter, langFilter]);
+    // Browse-style portal feed: rank by composite score, not strict recency.
+    return [...filtered].sort((a, b) => b.compositeScore - a.compositeScore);
+  }, [data.items, query, activeCat]);
 
-  const selectedItem = filteredItems.find((i) => i.id === selectedId) ?? filteredItems[0] ?? data.items[0];
-  const activeIndex = Math.max(0, filteredItems.findIndex((i) => i.id === selectedItem?.id));
+  const selectedItem = selectedId ? filteredItems.find((i) => i.id === selectedId) ?? null : null;
   const { day, month, weekday } = todayParts();
 
-  /** Unique publication dates that appear in the current feed, newest first.
-   *  Each entry carries the id of the first article on that date so clicking
-   *  the label scrolls to the right place. */
-  const feedDates = useMemo(() => {
-    const today = new Date();
-    const todayKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`;
-    const seen = new Set<string>();
-    const result: Array<{ label: string; firstId: string; isToday: boolean }> = [];
-    for (const item of filteredItems) {
-      const d = new Date(item.publishedAt);
-      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        const isToday = key === todayKey;
-        const label = isToday
-          ? "今天"
-          : `${d.getMonth() + 1}/${d.getDate()}`;
-        result.push({ label, firstId: item.id, isToday });
-      }
-      if (result.length >= 5) break;
-    }
-    return result;
-  }, [filteredItems]);
+  /** Reset pagination to the first page; call from any handler that changes the
+   *  filtered set (avoids a setState-in-effect cascade). */
+  const resetPaging = () => setVisibleCount(PAGE_SIZE);
 
-  /** Index in feedDates that matches the currently-visible article's date. */
-  const activeDateIndex = useMemo(() => {
-    if (!selectedItem) return 0;
-    const d = new Date(selectedItem.publishedAt);
-    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-    const idx = feedDates.findIndex(({ firstId }) => {
-      const fd = new Date(filteredItems.find((i) => i.id === firstId)?.publishedAt ?? "");
-      return `${fd.getFullYear()}-${fd.getMonth()}-${fd.getDate()}` === key;
-    });
-    return idx < 0 ? 0 : idx;
-  }, [selectedItem, feedDates, filteredItems]);
-
-  /* scroll tracking */
+  /* incremental rendering: reveal more cards as a sentinel scrolls into view.
+   * Re-created when the result count changes so the closure sees the new total. */
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const total = filteredItems.length;
   useEffect(() => {
-    const handle = () => {
-      const scrollable = document.documentElement.scrollHeight - window.innerHeight;
-      const progress = scrollable <= 0 ? 0 : Math.min(1, Math.max(0, window.scrollY / scrollable));
-      const anchor = Math.min(window.innerHeight * 0.38, 280);
-      const nearest = filteredItems
-        .map((item) => {
-          const rect = feedNodeMap.current.get(item.id)?.getBoundingClientRect();
-          return { id: item.id, distance: rect ? Math.abs(rect.top - anchor) : Infinity };
-        })
-        .sort((a, b) => a.distance - b.distance)[0];
-      setScrollProgress(progress);
-      if (nearest?.id) setSelectedId((cur) => cur === nearest.id ? cur : nearest.id);
-    };
-    const schedule = () => {
-      if (scrollFrameRef.current !== null) return;
-      scrollFrameRef.current = window.requestAnimationFrame(() => { scrollFrameRef.current = null; handle(); });
-    };
-    schedule();
-    window.addEventListener("scroll", schedule, { passive: true });
-    return () => {
-      window.removeEventListener("scroll", schedule);
-      if (scrollFrameRef.current !== null) { window.cancelAnimationFrame(scrollFrameRef.current); scrollFrameRef.current = null; }
-    };
-  }, [filteredItems]);
+    const node = sentinelRef.current;
+    if (!node) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) {
+        setVisibleCount((c) => (c < total ? c + PAGE_SIZE : c));
+      }
+    }, { rootMargin: "600px 0px" });
+    io.observe(node);
+    return () => io.disconnect();
+  }, [total]);
 
-  function registerFeedNode(id: string, node: HTMLElement | null) {
-    if (node) feedNodeMap.current.set(id, node);
-    else feedNodeMap.current.delete(id);
-  }
-
-  function scrollToItem(id: string) {
-    setSelectedId(id);
-    feedNodeMap.current.get(id)?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }
+  const visibleItems = filteredItems.slice(0, visibleCount);
 
   async function refreshFeed() {
+    resetPaging();
     if (useFrontendMock) {
       setData(frontendMockDashboardData);
       setBriefing(frontendMockDashboardData.briefing);
-      setSelectedId(frontendMockDashboardData.items[0]?.id ?? "");
+      setSelectedId(null);
       return;
     }
     // Trigger a background crawl cycle first so we get the freshest data,
@@ -186,7 +137,7 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
     await fetch("/api/crawl/trigger", { method: "POST" }).catch(() => {});
     const r = await fetch("/api/feed");
     const d = (await r.json()) as DashboardData;
-    setData(d); setBriefing(d.briefing); setSelectedId(d.items[0]?.id ?? "");
+    setData(d); setBriefing(d.briefing); setSelectedId(null);
   }
 
   async function refreshBriefing() {
@@ -195,6 +146,8 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
     const p = (await r.json()) as { briefing: BriefingSection[] };
     setBriefing(p.briefing);
   }
+
+  const detailGradient = selectedItem ? cardGradient(selectedItem.tags[0] ?? selectedItem.sourceName) : "";
 
   /* ── render ──────────────────────────────────────────────────────── */
 
@@ -237,332 +190,217 @@ export function DashboardShell({ initialData }: DashboardShellProps) {
 
         <RssManager open={rssOpen} onClose={() => setRssOpen(false)} onChanged={() => void refreshFeed()} />
 
-        {/* ── unified top widget: date + AI briefing + agent ── */}
-        <section className="grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)_300px]">
-
-          {/* left: date index */}
-          <div className="rounded-[34px] border border-[#d8e3ff] bg-[linear-gradient(180deg,#ffffff_0%,#f3f7ff_100%)] p-6 shadow-[0_18px_36px_rgba(61,116,255,0.08)] flex flex-col">
-            <div className="text-xs font-medium uppercase tracking-[0.24em] text-[#3d74ff]">日期索引</div>
-            <div className="mt-4 text-[68px] font-semibold leading-none text-[#3d74ff]">{day}</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">{month} 月 {weekday}</div>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-              <span className="flex items-center gap-1">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#22c55e]" />
-                最新 {formatDateTime(data.generatedAt)}
-              </span>
-              <span>共 {data.sourceSummary.totalItems} 条</span>
-            </div>
-            <div className="mt-auto pt-5 rounded-[24px] bg-[#111827] px-5 py-5 text-white">
-              <div className="text-xs font-medium text-white/60">今日主轴</div>
-              <div className="mt-2 text-lg font-semibold leading-7">
-                {data.trends.slice(0, 3).map((t) => t.label).join("、") || "高频成像、政务采购、星座部署"}
-              </div>
-            </div>
+        {/* ── category strip (栏目) ── */}
+        <nav className="rounded-full border border-[#ebedf2] bg-white px-3 py-2 shadow-[0_8px_24px_rgba(28,42,71,0.05)]">
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-thin">
+            {categories.map((cat) => {
+              const active = cat.key === activeCat.key;
+              return (
+                <button
+                  key={cat.key}
+                  type="button"
+                  onClick={() => { setActiveCatKey(cat.key); resetPaging(); }}
+                  className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm transition ${
+                    active
+                      ? "bg-[#1a1f2e] font-medium text-white"
+                      : "text-slate-500 hover:bg-[#f4f7ff] hover:text-[#1f5eff]"
+                  }`}
+                >
+                  {cat.label}
+                </button>
+              );
+            })}
           </div>
+        </nav>
 
-          {/* middle: today's AI briefing */}
-          <div className="rounded-[34px] border border-[#ebedf2] bg-white p-6 shadow-[0_14px_34px_rgba(28,42,71,0.06)]">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">今日 AI 速览</div>
-                <h2 className="mt-1.5 text-xl font-semibold text-slate-900">聚合摘要</h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => startTransition(() => void refreshBriefing())}
-                className="shrink-0 rounded-full border border-[#e8ebf0] px-3 py-1.5 text-xs text-slate-600 hover:bg-[#f8fafc] transition"
-              >
-                重新生成
-              </button>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              {briefing.length > 0 ? (
-                briefing.map((section) => (
-                  <div key={section.heading} className="rounded-[20px] bg-[#f7f9ff] px-4 py-4">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#3d74ff]">
-                      {section.heading}
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-slate-600">{section.body}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="col-span-3 rounded-[20px] bg-[#f7f9ff] px-4 py-6 text-center text-sm text-slate-400">
-                  正在生成 AI 速览……
-                </div>
-              )}
-            </div>
-          </div>
+        {/* ── feed (left grid) + detail/default panel (right) ── */}
+        <section className="grid items-start gap-8 xl:grid-cols-[minmax(0,1fr)_380px]">
 
-          {/* right: simplified agent widget */}
-          <div className="rounded-[34px] border border-[#ebedf2] bg-white p-6 shadow-[0_14px_34px_rgba(28,42,71,0.06)] flex flex-col">
-            <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">智能体</div>
-            <h3 className="mt-1.5 text-lg font-semibold text-slate-900">发送给你的 Agent</h3>
-            <p className="mt-3 text-sm leading-7 text-slate-500">
-              让它自动读取源、做摘要，并对当前日期的信息流建立上下文。
-            </p>
-            <div className="mt-4 rounded-[18px] border border-[#e8ebf0] bg-[#f8f9fb] px-4 py-3 font-mono text-xs text-[#3d74ff] leading-6">
-              Read /feeds/SKILL.md · parse rss · summarize news · ask follow-up
-            </div>
-            <div className="mt-auto pt-5">
-              <div className="grid grid-cols-2 gap-2 text-xs text-slate-500">
-                <div className="rounded-[14px] bg-[#f7f9ff] px-3 py-2.5">
-                  <div className="font-semibold text-[#3d74ff]">{data.sourceSummary.totalSources}</div>
-                  <div className="mt-0.5">来源总数</div>
-                </div>
-                <div className="rounded-[14px] bg-[#f0fdf4] px-3 py-2.5">
-                  <div className="font-semibold text-[#15803d]">{data.sourceSummary.liveSources}</div>
-                  <div className="mt-0.5">活跃源</div>
-                </div>
-                <div className="col-span-2 rounded-[14px] bg-[#f8fafc] px-3 py-2.5">
-                  <span className={data.sourceSummary.llmConfigured ? "text-[#15803d]" : "text-amber-600"}>
-                    {data.sourceSummary.llmConfigured ? "✓ LLM 已接入" : "⚠ 演示模式"}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* ── feed section (3-column) ── */}
-        <section className="grid items-start gap-8 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
-
-          {/* left sidebar */}
-          <aside className="space-y-4 xl:sticky xl:top-6">
-            {/* filter panel */}
-            <div className="rounded-[28px] border border-[#ebedf2] bg-white p-5 space-y-5">
-
-              {/* active-filter summary badge row */}
-              {(sourceFilter !== "全部" || regionFilter !== "全部" || langFilter !== "全部") && (
-                <div className="flex flex-wrap gap-1.5">
-                  {sourceFilter !== "全部" && (
-                    <FilterBadge label={sourceFilter} onClear={() => setSourceFilter("全部")} />
-                  )}
-                  {regionFilter !== "全部" && (
-                    <FilterBadge label={regionFilter} onClear={() => setRegionFilter("全部")} />
-                  )}
-                  {langFilter !== "全部" && (
-                    <FilterBadge label={langFilter} onClear={() => setLangFilter("全部")} />
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => { setSourceFilter("全部"); setRegionFilter("全部"); setLangFilter("全部"); }}
-                    className="rounded-full bg-[#fef2f2] px-2.5 py-1 text-xs text-red-500 hover:bg-red-50 transition"
-                  >
-                    全部清除
-                  </button>
-                </div>
-              )}
-
-              {/* source */}
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#3d74ff]">来源</div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {["全部", ...data.filters.sources].map((src) => (
-                    <FilterChip
-                      key={src}
-                      label={src}
-                      active={sourceFilter === src}
-                      onClick={() => setSourceFilter(src)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="border-t border-[#f1f3f6]" />
-
-              {/* region */}
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#3d74ff]">地区</div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {["全部", ...(data.filters.regions ?? [])].map((reg) => (
-                    <FilterChip
-                      key={reg}
-                      label={reg}
-                      active={regionFilter === reg}
-                      onClick={() => setRegionFilter(reg)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="border-t border-[#f1f3f6]" />
-
-              {/* language */}
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#3d74ff]">语言</div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {(["全部", "中文", "英文"] as const).map((lang) => (
-                    <FilterChip
-                      key={lang}
-                      label={lang}
-                      active={langFilter === lang}
-                      onClick={() => setLangFilter(lang)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-            </div>
-
-            <div className="rounded-[28px] border border-[#ebedf2] bg-white p-5">
-              <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">滑动索引</div>
-              <div className="mt-4 flex items-start gap-4">
-                {/* progress track */}
-                <div className="relative h-48 w-px bg-[#e2e6ef]">
-                  <div
-                    className="absolute left-1/2 top-0 w-0.5 -translate-x-1/2 rounded-full bg-[#3d74ff] transition-all"
-                    style={{ height: `${Math.max(6, scrollProgress * 100)}%` }}
-                  />
-                  <div
-                    className="absolute left-1/2 h-3 w-3 -translate-x-1/2 rounded-full border-2 border-white bg-[#3d74ff] shadow-[0_0_0_4px_rgba(61,116,255,0.12)] transition-all"
-                    style={{ top: `calc(${Math.min(1, scrollProgress) * 100}% - 6px)` }}
-                  />
-                </div>
-                {/* date labels — derived from actual feed items, active label tracks viewport */}
-                <div className="space-y-5">
-                  {feedDates.map(({ label, firstId }, idx) => {
-                    const isActive = idx === activeDateIndex;
-                    return (
-                      <button
-                        key={firstId}
-                        type="button"
-                        onClick={() => scrollToItem(firstId)}
-                        className={`block text-left font-mono transition ${
-                          isActive
-                            ? "text-2xl font-semibold text-[#3d74ff]"
-                            : "text-lg text-slate-300 hover:text-slate-500"
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="mt-5 rounded-[18px] bg-[#f7f9ff] px-4 py-3 text-sm text-slate-500">
-                当前第 {filteredItems.length ? activeIndex + 1 : 0} / {filteredItems.length} 条
-              </div>
-            </div>
-
-            <div className="rounded-[28px] border border-[#ebedf2] bg-white p-5">
-              <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">高频主题</div>
-              <div className="mt-4 space-y-3">
-                {data.trends.slice(0, 5).map((trend) => (
-                  <div key={trend.label} className="flex items-center justify-between text-sm">
-                    <div className="text-slate-700">{trend.label}</div>
-                    <div className="rounded-full bg-[#f3f6ff] px-2.5 py-1 text-xs text-[#3d74ff]">{trend.count}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </aside>
-
-          {/* feed */}
+          {/* left: image+title card grid */}
           <section className="min-w-0">
-            <div className="rounded-[32px] border border-[#ebedf2] bg-white p-6 shadow-[0_12px_30px_rgba(28,42,71,0.06)]">
-              <div className="flex flex-col gap-4 border-b border-[#eff1f4] pb-5 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">资讯流瀑布</div>
-                  <h2 className="mt-2 text-3xl font-semibold text-slate-900">按时间推进的信息流</h2>
-                </div>
-                <div className="flex flex-wrap gap-3">
-                  <input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="搜索标题、主题或摘要"
-                    className="w-full rounded-full border border-[#e8ebf0] bg-[#fafbfc] px-4 py-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 lg:w-72"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => startTransition(() => void refreshFeed())}
-                    className="rounded-full border border-[#e8ebf0] bg-white px-4 py-3 text-sm text-slate-700"
-                  >
-                    {isPending ? "刷新中..." : "刷新订阅流"}
-                  </button>
-                </div>
+            <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">资讯流</div>
+                <h2 className="mt-1.5 text-2xl font-semibold text-slate-900">
+                  {activeCat.dim === "all" ? "全部资讯" : activeCat.label}
+                  <span className="ml-2 text-base font-normal text-slate-400">{filteredItems.length} 条</span>
+                </h2>
               </div>
-              <div className="mt-6 space-y-6 pr-2">
-                {filteredItems.map((item) => (
-                  <FeedCard
-                    key={item.id}
-                    item={item}
-                    active={item.id === selectedItem?.id}
-                    onSelect={() => scrollToItem(item.id)}
-                    registerNode={registerFeedNode}
-                  />
-                ))}
-                {filteredItems.length === 0 && (
-                  <div className="rounded-[24px] border border-dashed border-[#d9deea] p-8 text-center text-sm text-slate-400">
-                    没有匹配当前筛选条件的资讯。
-                  </div>
-                )}
+              <div className="flex flex-wrap gap-3">
+                <input
+                  value={query}
+                  onChange={(e) => { setQuery(e.target.value); resetPaging(); }}
+                  placeholder="搜索标题、主题或摘要"
+                  className="w-full rounded-full border border-[#e8ebf0] bg-white px-4 py-2.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 lg:w-64"
+                />
+                <button
+                  type="button"
+                  onClick={() => startTransition(() => void refreshFeed())}
+                  className="shrink-0 rounded-full border border-[#e8ebf0] bg-white px-4 py-2.5 text-sm text-slate-700 hover:bg-[#f8fafc] transition"
+                >
+                  {isPending ? "刷新中..." : "刷新订阅流"}
+                </button>
               </div>
             </div>
+
+            {filteredItems.length === 0 ? (
+              <div className="rounded-[24px] border border-dashed border-[#d9deea] p-12 text-center text-sm text-slate-400">
+                没有匹配当前栏目或搜索条件的资讯。
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-5 sm:grid-cols-2 2xl:grid-cols-3">
+                  {visibleItems.map((item) => (
+                    <FeedCard
+                      key={item.id}
+                      item={item}
+                      active={item.id === selectedItem?.id}
+                      onSelect={() => setSelectedId(item.id)}
+                    />
+                  ))}
+                </div>
+                <div ref={sentinelRef} className="h-10" />
+              </>
+            )}
           </section>
 
-          {/* right: article detail + chat (今日AI速览 removed — now in top widget) */}
+          {/* right: detail when selected, otherwise today's date + theme + briefing */}
           <aside className="space-y-5 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto xl:overscroll-contain xl:pr-2 scrollbar-thin">
-            <section className="rounded-[28px] border border-[#ebedf2] bg-white p-5 shadow-[0_12px_28px_rgba(28,42,71,0.06)]">
-              <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">AI 抓取摘要</div>
-              <h2 className="mt-2 text-2xl font-semibold text-slate-900">{selectedItem?.title ?? "请选择一条新闻"}</h2>
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                <span>{selectedItem?.sourceName}</span>
-                <span>{selectedItem ? formatFullDate(selectedItem.publishedAt) : ""}</span>
-              </div>
-              <div className="mt-4 rounded-[22px] bg-[#f7f9ff] px-4 py-4">
-                <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">AI 摘要</div>
-                <p className="mt-2 text-sm leading-7 text-slate-700">{selectedItem?.summary}</p>
-              </div>
-              <div className="mt-4 rounded-[22px] bg-[#fafbfc] px-4 py-4">
-                <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">原文摘要</div>
-                <p className="mt-2 text-sm leading-7 text-slate-600">{selectedItem?.excerpt}</p>
-              </div>
-              <div className="mt-4 rounded-[22px] bg-[#fbfbfc] px-4 py-4">
-                <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">为什么值得看</div>
-                <p className="mt-2 text-sm leading-7 text-slate-600">{selectedItem?.whyItMatters}</p>
-              </div>
-              <a
-                href={selectedItem?.url}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-4 inline-flex rounded-full bg-[#1f2430] px-4 py-2 text-sm font-medium text-white"
-              >
-                打开原文
-              </a>
-            </section>
+            {selectedItem ? (
+              <>
+                <section className="overflow-hidden rounded-[28px] border border-[#ebedf2] bg-white shadow-[0_12px_28px_rgba(28,42,71,0.06)]">
+                  <div className="relative aspect-[16/9] w-full overflow-hidden">
+                    {selectedItem.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={selectedItem.image} alt={selectedItem.title} className="h-full w-full object-cover" />
+                    ) : (
+                      <div className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${detailGradient}`}>
+                        <span className="px-4 text-center text-lg font-semibold text-white/90">
+                          {selectedItem.tags[0] ?? selectedItem.sourceName}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-5">
+                    <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">AI 摘要</div>
+                    <h2 className="mt-2 text-2xl font-semibold leading-snug text-slate-900">{selectedItem.title}</h2>
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                      <span>{selectedItem.sourceName}</span>
+                      <span>{formatFullDate(selectedItem.publishedAt)}</span>
+                    </div>
+                    <div className="mt-4 rounded-[22px] bg-[#f7f9ff] px-4 py-4">
+                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">AI 摘要</div>
+                      <p className="mt-2 text-sm leading-7 text-slate-700">{selectedItem.summary}</p>
+                    </div>
+                    <div className="mt-4 rounded-[22px] bg-[#fafbfc] px-4 py-4">
+                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">原文摘要</div>
+                      <p className="mt-2 text-sm leading-7 text-slate-600">{selectedItem.excerpt}</p>
+                    </div>
+                    <div className="mt-4 rounded-[22px] bg-[#fbfbfc] px-4 py-4">
+                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">为什么值得看</div>
+                      <p className="mt-2 text-sm leading-7 text-slate-600">{selectedItem.whyItMatters}</p>
+                    </div>
+                    <div className="mt-4 flex items-center gap-3">
+                      <a
+                        href={selectedItem.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex rounded-full bg-[#1f2430] px-4 py-2 text-sm font-medium text-white"
+                      >
+                        打开原文
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(null)}
+                        className="rounded-full border border-[#e8ebf0] px-4 py-2 text-sm text-slate-500 hover:bg-[#f8fafc] transition"
+                      >
+                        返回今日
+                      </button>
+                    </div>
+                  </div>
+                </section>
 
-            <ChatPanel selectedItems={selectedItem ? [selectedItem] : filteredItems.slice(0, 1)} />
+                <ChatPanel selectedItems={[selectedItem]} />
+              </>
+            ) : (
+              <>
+                {/* today's date */}
+                <section className="rounded-[28px] border border-[#d8e3ff] bg-[linear-gradient(180deg,#ffffff_0%,#f3f7ff_100%)] p-6 shadow-[0_18px_36px_rgba(61,116,255,0.08)]">
+                  <div className="text-xs font-medium uppercase tracking-[0.24em] text-[#3d74ff]">今日</div>
+                  <div className="mt-3 text-[64px] font-semibold leading-none text-[#3d74ff]">{day}</div>
+                  <div className="mt-2 text-xl font-semibold text-slate-900">{month} 月 · {weekday}</div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                    <span className="flex items-center gap-1">
+                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#22c55e]" />
+                      最新 {formatDateTime(data.generatedAt)}
+                    </span>
+                    <span>共 {data.sourceSummary.totalItems} 条</span>
+                  </div>
+                  <div className="mt-5 rounded-[20px] bg-[#111827] px-5 py-4 text-white">
+                    <div className="text-xs font-medium text-white/60">今日主题</div>
+                    <div className="mt-2 text-base font-semibold leading-7">
+                      {data.trends.slice(0, 3).map((t) => t.label).join("、") || "高频成像、政务采购、星座部署"}
+                    </div>
+                  </div>
+                </section>
+
+                {/* today's AI briefing */}
+                <section className="rounded-[28px] border border-[#ebedf2] bg-white p-6 shadow-[0_12px_28px_rgba(28,42,71,0.06)]">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">今日 AI 速览</div>
+                      <h3 className="mt-1.5 text-lg font-semibold text-slate-900">聚合摘要</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => startTransition(() => void refreshBriefing())}
+                      className="shrink-0 rounded-full border border-[#e8ebf0] px-3 py-1.5 text-xs text-slate-600 hover:bg-[#f8fafc] transition"
+                    >
+                      重新生成
+                    </button>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {briefing.length > 0 ? (
+                      briefing.map((section) => (
+                        <div key={section.heading} className="rounded-[18px] bg-[#f7f9ff] px-4 py-4">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#3d74ff]">
+                            {section.heading}
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-slate-600">{section.body}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-[18px] bg-[#f7f9ff] px-4 py-6 text-center text-sm text-slate-400">
+                        正在生成 AI 速览……
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-4 text-center text-xs text-slate-400">点击左侧任意资讯卡片，查看 AI 摘要并追问</div>
+                </section>
+
+                {/* high-frequency topics */}
+                <section className="rounded-[28px] border border-[#ebedf2] bg-white p-6 shadow-[0_12px_28px_rgba(28,42,71,0.06)]">
+                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">高频主题</div>
+                  <div className="mt-4 space-y-3">
+                    {data.trends.slice(0, 6).map((trend) => (
+                      <button
+                        key={trend.label}
+                        type="button"
+                        onClick={() => { setActiveCatKey(`tag:${trend.label}`); resetPaging(); }}
+                        className="flex w-full items-center justify-between text-sm"
+                      >
+                        <span className="text-slate-700 hover:text-[#1f5eff] transition">{trend.label}</span>
+                        <span className="rounded-full bg-[#f3f6ff] px-2.5 py-1 text-xs text-[#3d74ff]">{trend.count}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </>
+            )}
           </aside>
         </section>
 
       </div>
     </main>
-  );
-}
-
-/* ── shared filter sub-components ─────────────────────────────────── */
-
-function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full border px-3 py-1.5 text-sm transition ${
-        active
-          ? "border-[#bfd0ff] bg-[#eef4ff] text-[#1f5eff]"
-          : "border-[#e8ebf0] bg-white text-slate-500 hover:border-[#bfd0ff] hover:text-[#1f5eff]"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function FilterBadge({ label, onClear }: { label: string; onClear: () => void }) {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-[#eef4ff] px-2.5 py-1 text-xs font-medium text-[#1f5eff]">
-      {label}
-      <button type="button" onClick={onClear} className="hover:text-red-500 transition leading-none">×</button>
-    </span>
   );
 }

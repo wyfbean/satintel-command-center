@@ -24,6 +24,8 @@ export type RawIntelRecord = {
   tags: string[];
   region: string;
   imageryModes: Array<"RGB" | "SAR" | "MS">;
+  /** Optional thumbnail/hero image URL extracted from the source (RSS media/enclosure/og). */
+  image?: string | null;
 };
 
 export type IntelItem = RawIntelRecord & {

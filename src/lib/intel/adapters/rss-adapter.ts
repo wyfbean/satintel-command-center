@@ -29,6 +29,32 @@ function normalizeItems(items: unknown) {
   return [];
 }
 
+function firstUrlAttr(node: unknown): string | undefined {
+  // media:content / media:thumbnail / enclosure may be a single object or an array.
+  const candidates = Array.isArray(node) ? node : node ? [node] : [];
+  for (const entry of candidates) {
+    const obj = entry as { url?: unknown; type?: unknown } | undefined;
+    const url = obj?.url;
+    if (typeof url === "string" && url.trim()) {
+      const type = typeof obj?.type === "string" ? obj.type : "";
+      // For enclosures, only accept image types; media:* tags are images by intent.
+      if (!type || type.startsWith("image/")) return url.trim();
+    }
+  }
+  return undefined;
+}
+
+/** Best-effort thumbnail extraction from an RSS/Atom item. */
+function extractImage(item: Record<string, unknown>, rawHtml: string): string | undefined {
+  return (
+    firstUrlAttr(item["media:content"]) ??
+    firstUrlAttr(item["media:thumbnail"]) ??
+    firstUrlAttr(item.enclosure) ??
+    rawHtml.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1]?.trim() ??
+    undefined
+  );
+}
+
 export class RssAdapter implements SourceAdapter {
   kind: IntelSource["kind"] = "rss";
 
@@ -73,6 +99,7 @@ export class RssAdapter implements SourceAdapter {
           ? linkValue
           : String((linkValue as { href?: string })?.href ?? source.url ?? "");
       const body = stripHtml(rawSummary).slice(0, 900);
+      const image = extractImage(item, rawSummary);
 
       // ID is a stable hash of source + URL so the same article never creates a
       // duplicate row even when it shifts positions in the feed.
@@ -92,6 +119,7 @@ export class RssAdapter implements SourceAdapter {
         tags: source.tags,
         region: source.region,
         imageryModes: guessModes(`${title} ${body}`),
+        image,
       } satisfies RawIntelRecord;
     });
   }

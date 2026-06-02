@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import type { IntelItem } from "@/types/intel";
 
 function formatTime(isoString: string) {
@@ -12,21 +14,18 @@ function formatTime(isoString: string) {
   const isThisYear = d.getFullYear() === now.getFullYear();
 
   if (isToday) {
-    // Same day → "今天 HH:mm"
     return (
       "今天 " +
       new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(d)
     );
   }
   if (isThisYear) {
-    // Same year → "MM/DD HH:mm"
     return new Intl.DateTimeFormat("zh-CN", {
       month: "2-digit", day: "2-digit",
       hour: "2-digit", minute: "2-digit",
       hour12: false,
     }).format(d);
   }
-  // Different year → "YYYY/MM/DD HH:mm"
   return new Intl.DateTimeFormat("zh-CN", {
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit",
@@ -34,76 +33,83 @@ function formatTime(isoString: string) {
   }).format(d);
 }
 
-function scoreTone(score: number) {
-  if (score >= 0.75) return "text-[#1f5eff]";
-  if (score >= 0.55) return "text-[#3d74ff]";
-  return "text-slate-500";
+/** A small palette of gradient classes; a stable hash maps each seed to one
+ *  so the same column/tag always renders the same placeholder colour. */
+const GRADIENTS = [
+  "from-[#3d74ff] to-[#22d3ee]",
+  "from-[#6366f1] to-[#a855f7]",
+  "from-[#0ea5e9] to-[#2563eb]",
+  "from-[#f59e0b] to-[#ef4444]",
+  "from-[#10b981] to-[#0891b2]",
+  "from-[#8b5cf6] to-[#ec4899]",
+  "from-[#1f2937] to-[#3b82f6]",
+];
+
+export function cardGradient(seed: string) {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+  return GRADIENTS[Math.abs(hash) % GRADIENTS.length];
 }
 
 type FeedCardProps = {
   item: IntelItem;
   active: boolean;
   onSelect: () => void;
-  registerNode?: (id: string, node: HTMLElement | null) => void;
 };
 
-export function FeedCard({ item, active, onSelect, registerNode }: FeedCardProps) {
+export function FeedCard({ item, active, onSelect }: FeedCardProps) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const showImage = Boolean(item.image) && !imgFailed;
+  const gradient = cardGradient(item.tags[0] ?? item.sourceName ?? item.id);
+  const placeholderLabel = item.tags[0] ?? item.sourceName;
+
   return (
-    <article
-      id={`news-${item.id}`}
-      ref={(node) => registerNode?.(item.id, node)}
-      data-news-id={item.id}
-      className="scroll-mt-28 grid grid-cols-[54px_1fr] gap-4"
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={active ? "true" : undefined}
+      className={`group flex h-full w-full flex-col overflow-hidden rounded-[22px] border bg-white text-left transition ${
+        active
+          ? "border-[#bfd0ff] shadow-[0_14px_34px_rgba(61,116,255,0.16)]"
+          : "border-[#ebeef3] hover:border-[#d6def7] hover:shadow-[0_10px_24px_rgba(28,42,71,0.08)]"
+      }`}
     >
-      <div className="flex flex-col items-center">
-        <div
-          className={`rounded-full border px-2 py-1 text-[11px] font-medium transition ${
-            active ? "border-[#3d74ff] bg-[#3d74ff] text-white" : "border-[#dfe7ff] bg-white text-[#3d74ff]"
-          }`}
-        >
-          {item.timelineLabel}
-        </div>
-        <div className={`mt-3 h-full w-px transition ${active ? "bg-[#3d74ff]" : "bg-[#e7e9ef]"}`} />
+      {/* image / gradient placeholder (16:9) */}
+      <div className="relative aspect-[16/9] w-full overflow-hidden">
+        {showImage ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={item.image as string}
+            alt={item.title}
+            loading="lazy"
+            onError={() => setImgFailed(true)}
+            className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
+          />
+        ) : (
+          <div className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${gradient}`}>
+            <span className="px-3 text-center text-base font-semibold tracking-wide text-white/90">
+              {placeholderLabel}
+            </span>
+          </div>
+        )}
+        <span className="absolute left-3 top-3 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
+          {item.sourceLabel}
+        </span>
       </div>
 
-      <button
-        type="button"
-        onClick={onSelect}
-        aria-current={active ? "true" : undefined}
-        className={`w-full rounded-[28px] border bg-white p-5 text-left transition ${
-          active
-            ? "border-[#bfd0ff] shadow-[0_14px_34px_rgba(61,116,255,0.12)]"
-            : "border-[#ebeef3] hover:border-[#d6def7]"
-        }`}
-      >
-        <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
-          <span className="font-mono text-xs text-slate-400">{formatTime(item.publishedAt)}</span>
+      {/* body */}
+      <div className="flex flex-1 flex-col p-4">
+        <h3 className="line-clamp-2 text-[17px] font-semibold leading-[1.4] text-slate-900">
+          {item.title}
+        </h3>
+        <div className="mt-auto flex flex-wrap items-center gap-2 pt-3 text-xs text-slate-400">
           <span>{item.sourceName}</span>
-          <span className="rounded-full bg-[#f3f6ff] px-2.5 py-1 text-xs text-[#3d74ff]">{item.sourceLabel}</span>
-          <span className={`ml-auto text-xs font-medium ${scoreTone(item.compositeScore)}`}>
+          <span className="font-mono">{formatTime(item.publishedAt)}</span>
+          <span className="ml-auto rounded-full bg-[#f3f6ff] px-2 py-0.5 font-medium text-[#3d74ff]">
             热度 {Math.round(item.compositeScore * 100)}
           </span>
         </div>
-
-        <h3 className="mt-3 text-[28px] font-semibold leading-[1.35] text-slate-900">{item.title}</h3>
-        <p className="mt-3 text-lg leading-8 text-slate-600">{item.excerpt}</p>
-
-        <div className="mt-4 rounded-[22px] bg-[#f7f9ff] px-4 py-4">
-          <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">AI 摘要</div>
-          <p className="mt-2 text-sm leading-7 text-slate-700">{item.summary}</p>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          {item.tags.slice(0, 4).map((tag) => (
-            <span
-              key={`${item.id}-${tag}`}
-              className="rounded-full border border-[#e8ebf0] bg-[#fbfbfc] px-3 py-1 text-xs text-slate-500"
-            >
-              {tag}
-            </span>
-          ))}
-        </div>
-      </button>
-    </article>
+      </div>
+    </button>
   );
 }

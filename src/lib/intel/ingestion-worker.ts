@@ -90,6 +90,7 @@ export async function runIngestionCycle(): Promise<IngestionResult> {
           tags: item.tags,
           region: item.region,
           imageryModes: item.imageryModes,
+          image: item.image,
         },
         titleZh,
         summary: item.summary,

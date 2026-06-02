@@ -37,6 +37,7 @@ type DbRow = {
   region: string;
   imagery_modes: string;
   composite_score: number;
+  image: string;
 };
 
 function rowToArticle(r: DbRow): StoredArticle {
@@ -60,6 +61,7 @@ function rowToArticle(r: DbRow): StoredArticle {
       ? r.imagery_modes.split(",").filter(Boolean)
       : ["RGB"]) as Array<"RGB" | "SAR" | "MS">,
     compositeScore: r.composite_score,
+    image: r.image || undefined,
   };
 }
 
@@ -82,8 +84,8 @@ export function upsertArticle(p: UpsertPayload): boolean {
   db.prepare(`
     INSERT OR REPLACE INTO articles
       (id, source_id, source_name, channel, title, title_zh, excerpt, body, url,
-       summary, why_it_matters, published_at, crawled_at, tags, region, imagery_modes, composite_score)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       summary, why_it_matters, published_at, crawled_at, tags, region, imagery_modes, composite_score, image)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     p.record.id,
     p.record.sourceId,
@@ -102,6 +104,7 @@ export function upsertArticle(p: UpsertPayload): boolean {
     p.record.region,
     p.record.imageryModes.join(","),
     p.compositeScore,
+    p.record.image ?? "",
   );
   return !existing;
 }
