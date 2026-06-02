@@ -9,9 +9,8 @@ type SiteNavProps = {
 };
 
 const links = [
-  { href: "/news", label: "资讯流" },
+  { href: "/news", label: "首页" },
   { href: "/orchestration", label: "智能体分析" },
-  { href: "/dashboard", label: "数据面板" },
   { href: "/globe", label: "3D 星图" },
 ];
 
