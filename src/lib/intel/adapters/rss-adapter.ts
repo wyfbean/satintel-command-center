@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { XMLParser } from "fast-xml-parser";
 
 import type { SourceAdapter } from "@/lib/intel/adapters/base";
@@ -37,9 +38,13 @@ export class RssAdapter implements SourceAdapter {
     }
 
     const response = await fetch(source.url, {
-      next: { revalidate: 1800 },
+      // no-store: always fetch fresh XML — never reuse Next.js's server-side
+      // fetch cache. Without this the ingestion worker keeps seeing the same
+      // stale feed response on every 30-minute cycle.
+      cache: "no-store",
       headers: {
         "user-agent": "SatIntelCommandCenter/1.0",
+        Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
       },
     });
 
@@ -57,7 +62,7 @@ export class RssAdapter implements SourceAdapter {
     const feed = parser.parse(xml);
     const channelItems = normalizeItems(feed?.rss?.channel?.item ?? feed?.feed?.entry);
 
-    return channelItems.slice(0, 6).map((item: Record<string, unknown>, index: number) => {
+    return channelItems.slice(0, 20).map((item: Record<string, unknown>) => {
       const title = String(item.title ?? "Untitled signal");
       const rawSummary =
         String(item.description ?? item.summary ?? item["content:encoded"] ?? "") ||
@@ -69,8 +74,13 @@ export class RssAdapter implements SourceAdapter {
           : String((linkValue as { href?: string })?.href ?? source.url ?? "");
       const body = stripHtml(rawSummary).slice(0, 900);
 
+      // ID is a stable hash of source + URL so the same article never creates a
+      // duplicate row even when it shifts positions in the feed.
+      const stableKey = `${source.id}::${url || title}`;
+      const id = `${source.id}-${crypto.createHash("sha256").update(stableKey).digest("hex").slice(0, 14)}`;
+
       return {
-        id: `${source.id}-${index}-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        id,
         sourceId: source.id,
         sourceName: source.name,
         channel: "rss",

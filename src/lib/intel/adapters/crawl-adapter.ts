@@ -54,7 +54,7 @@ export class CrawlAdapter implements SourceAdapter {
     const settled = await Promise.allSettled(
       source.urls.map(async (url, index) => {
         const response = await fetch(url, {
-          next: { revalidate: 1800 },
+          cache: "no-store",
           headers: {
             accept: "text/html,application/xhtml+xml",
             "user-agent": "SatIntelCommandCenter/1.0 (+mock-backend)",
