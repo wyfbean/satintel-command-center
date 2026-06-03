@@ -183,17 +183,12 @@ export function NewsFeed({ data, activeSource, onClearSource, onSelect, onRefres
                   <span>{selectedItem.sourceName}</span>
                   <span>{formatFullDate(selectedItem.publishedAt)}</span>
                 </div>
-                <div className="mt-4 rounded-[22px] bg-[#f7f9ff] px-4 py-4">
-                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#3d74ff]">AI 摘要</div>
-                  <p className="mt-2 text-sm leading-7 text-slate-700">{selectedItem.summary}</p>
-                </div>
-                <div className="mt-4 rounded-[22px] bg-[#fafbfc] px-4 py-4">
-                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">原文摘要</div>
-                  <p className="mt-2 text-sm leading-7 text-slate-600">{selectedItem.excerpt}</p>
-                </div>
-                <div className="mt-4 rounded-[22px] bg-[#fbfbfc] px-4 py-4">
-                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">为什么值得看</div>
-                  <p className="mt-2 text-sm leading-7 text-slate-600">{selectedItem.whyItMatters}</p>
+                <div className="mt-4 space-y-2.5 text-sm leading-7 text-slate-600">
+                  <p>{selectedItem.summary}</p>
+                  {selectedItem.whyItMatters &&
+                   selectedItem.whyItMatters !== selectedItem.summary && (
+                    <p>{selectedItem.whyItMatters}</p>
+                  )}
                 </div>
                 <div className="mt-4 rounded-[18px] bg-[#eef4ff] px-4 py-3 text-xs leading-5 text-[#2a55cc]">
                   💬 点击右下角 AI 气泡，可基于本文向智能体追问。
