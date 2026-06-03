@@ -1,7 +1,7 @@
 "use client";
 
 import type { DashboardAgentState } from "@/lib/a2a/dashboard-agent";
-import type { BriefingSection, TrendSignal } from "@/types/intel";
+import type { BriefingSection, IntelItem, TrendSignal } from "@/types/intel";
 
 /**
  * AG-UI 驱动的「今日趋势」hero。
@@ -65,7 +65,7 @@ export function TrendDashboard({ state, briefingOverride }: Props) {
 
       {/* trend chart + briefing */}
       <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
-        <TrendChart trends={trends} />
+        <TrendChart trends={trends} items={state.items ?? []} />
         <BriefingPanel sections={briefing} />
       </div>
     </section>
@@ -105,10 +105,23 @@ function DateCard({ day, month, weekday, themes }: { day: number; month: number;
 
 /* ── trend spark chart ────────────────────────────────────────────── */
 
-function TrendChart({ trends }: { trends: TrendSignal[] }) {
+function TrendChart({ trends, items }: { trends: TrendSignal[]; items: IntelItem[] }) {
   const maxCount = Math.max(1, ...trends.map((t) => t.count));
+
+  // Derive source breakdown from items (top 5 by article count).
+  const sourceCounts = (() => {
+    const m = new Map<string, number>();
+    for (const item of items) {
+      m.set(item.sourceName, (m.get(item.sourceName) ?? 0) + 1);
+    }
+    return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  })();
+  const maxSrc = Math.max(1, ...sourceCounts.map(([, n]) => n));
+  const total = sourceCounts.reduce((s, [, n]) => s + n, 0) || 1;
+
   return (
     <div className="rounded-2xl border border-[#ebeef3] bg-white p-5 shadow-[0_10px_24px_rgba(28,42,71,0.05)]">
+      {/* trend bars */}
       <div className="mb-4">
         <h3 className="text-sm font-semibold text-slate-900">主题趋势</h3>
         <p className="text-xs text-slate-400">当前数据集中的信号强度</p>
@@ -127,6 +140,33 @@ function TrendChart({ trends }: { trends: TrendSignal[] }) {
               <span className="w-12 text-right text-xs text-slate-400">{t.delta}</span>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* source breakdown — fills the empty space below the trend bars */}
+      {sourceCounts.length > 0 && (
+        <div className="mt-5 border-t border-[#f1f3f6] pt-4">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">来源分布</span>
+            <span className="text-[10px] text-slate-300">{total} 条</span>
+          </div>
+          <div className="space-y-2.5">
+            {sourceCounts.map(([name, count]) => {
+              const pct = Math.round((count / total) * 100);
+              return (
+                <div key={name} className="flex items-center gap-2.5">
+                  <span className="w-24 shrink-0 truncate text-xs text-slate-600">{name}</span>
+                  <div className="flex-1 overflow-hidden rounded-full bg-[#f1f5f9]">
+                    <div
+                      className="h-1.5 rounded-full bg-[#93b4f0] transition-all"
+                      style={{ width: `${Math.round((count / maxSrc) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="w-8 text-right text-[11px] text-slate-400">{pct}%</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
