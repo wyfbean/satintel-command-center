@@ -1,0 +1,5 @@
+# Install into root .venv (Python 3.12):
+# uv pip install --python ".venv\Scripts\python.exe" kuzu "mcp[cli]" fastmcp
+kuzu==0.11.3
+mcp[cli]
+fastmcp
