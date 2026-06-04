@@ -1,7 +1,7 @@
 /**
  * Content-Based Re-ranking with click-derived user preferences.
  *
- * Algorithm (v0.1):
+ * Algorithm (v0.2):
  *   rerankedScore(item) = compositeScore(item) + boost(prefs, item)
  *
  *   boost = Σ decay(w_f) × FEATURE_WEIGHTS[type]
@@ -9,7 +9,11 @@
  *
  *   decay(w, lastUpdatedMs) = w × 0.5^(daysSince / HALF_LIFE_DAYS)
  *
- * Feature types extracted from each clicked article:
+ * Signal strengths (weight added per event):
+ *   click (+1)  — user opened the article detail panel
+ *   dwell (+2)  — user read the article for ≥ DWELL_THRESHOLD_MS seconds
+ *
+ * Feature types extracted from each event:
  *   - tag    (0.12 each) — broad topic signal
  *   - region (0.20)      — geographic focus
  *   - source (0.08)      — source preference (weakest, editorial bias risk)
@@ -112,39 +116,53 @@ export function getPreferences(sessionId: string): UserInterest[] {
 /* ── public: record a click ──────────────────────────────────────── */
 
 /**
- * Records a click in user_events and upserts aggregated weights in
- * user_interests (+1 per feature of the clicked article).
+ * Records an event in user_events and upserts aggregated weights.
+ *
+ * @param weight  1 for a plain click; 2 for a dwell (user read ≥ threshold).
+ *                Passing a higher weight directly encodes signal strength so
+ *                callers don't need to know the internal schema.
  */
-export function recordClick(sessionId: string, article: {
-  id: string;
-  tags: string[];
-  region: string;
-  sourceName: string;
-}): void {
+export function recordClick(
+  sessionId: string,
+  article: { id: string; tags: string[]; region: string; sourceName: string },
+  weight = 1,
+): void {
   const db = getDb();
   if (!db || !sessionId) return;
 
-  const now = Date.now();
+  const now      = Date.now();
+  const safeW    = Math.max(1, Math.min(weight, 3));   // clamp 1–3
+  const evType   = safeW > 1 ? "dwell" : "click";
 
   // 1. raw event log
   db.prepare(
-    "INSERT INTO user_events (session_id, article_id, event_type, created_at) VALUES (?, ?, 'click', ?)",
-  ).run(sessionId, article.id, now);
+    "INSERT INTO user_events (session_id, article_id, event_type, created_at) VALUES (?, ?, ?, ?)",
+  ).run(sessionId, article.id, evType, now);
 
-  // 2. upsert aggregated preferences (weight += 1 per feature)
+  // 2. upsert aggregated preferences
   const upsert = db.prepare(`
     INSERT INTO user_interests (session_id, feature_type, feature_value, weight, last_updated)
-    VALUES (?, ?, ?, 1.0, ?)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(session_id, feature_type, feature_value)
-    DO UPDATE SET weight = weight + 1.0, last_updated = excluded.last_updated
+    DO UPDATE SET weight = weight + excluded.weight, last_updated = excluded.last_updated
   `);
 
   const run = db.transaction(() => {
     for (const tag of article.tags.slice(0, 6)) {
-      if (tag) upsert.run(sessionId, "tag", tag, now);
+      if (tag) upsert.run(sessionId, "tag", tag, safeW, now);
     }
-    if (article.region)     upsert.run(sessionId, "region", article.region,     now);
-    if (article.sourceName) upsert.run(sessionId, "source", article.sourceName, now);
+    if (article.region)     upsert.run(sessionId, "region", article.region,     safeW, now);
+    if (article.sourceName) upsert.run(sessionId, "source", article.sourceName, safeW, now);
   });
   run();
+}
+
+/* ── public: clear preferences ───────────────────────────────────── */
+
+/** Delete all stored preferences for a session (user-triggered reset). */
+export function clearPreferences(sessionId: string): void {
+  const db = getDb();
+  if (!db || !sessionId) return;
+  db.prepare("DELETE FROM user_interests WHERE session_id = ?").run(sessionId);
+  db.prepare("DELETE FROM user_events    WHERE session_id = ?").run(sessionId);
 }

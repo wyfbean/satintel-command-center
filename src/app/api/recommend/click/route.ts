@@ -1,6 +1,9 @@
 /**
  * POST /api/recommend/click
- * Body: { articleId: string, sid: string }
+ * Body: { articleId: string, sid: string, weight?: number }
+ *
+ * weight = 1  → plain click (user opened the article)
+ * weight = 2  → dwell     (user read ≥ DWELL_THRESHOLD_MS seconds)
  *
  * Looks up the article in the DB to extract its tags / region / source,
  * then calls recordClick() to update the session's preference weights.
@@ -13,7 +16,7 @@ import { recordClick } from "@/lib/intel/reranker";
 
 export const dynamic = "force-dynamic";
 
-type Body = { articleId?: string; sid?: string };
+type Body = { articleId?: string; sid?: string; weight?: number };
 
 type ArticleRow = {
   tags:        string;
@@ -23,7 +26,7 @@ type ArticleRow = {
 
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as Body;
-  const { articleId, sid } = body;
+  const { articleId, sid, weight = 1 } = body;
 
   if (!articleId || !sid) {
     return NextResponse.json({ ok: false, error: "articleId and sid required" }, { status: 400 });
@@ -37,12 +40,16 @@ export async function POST(req: Request) {
     .get(articleId) as ArticleRow | undefined;
 
   if (row) {
-    recordClick(sid, {
-      id:         articleId,
-      tags:       row.tags ? row.tags.split(",").filter(Boolean) : [],
-      region:     row.region,
-      sourceName: row.source_name,
-    });
+    recordClick(
+      sid,
+      {
+        id:         articleId,
+        tags:       row.tags ? row.tags.split(",").filter(Boolean) : [],
+        region:     row.region,
+        sourceName: row.source_name,
+      },
+      weight,
+    );
   }
 
   return NextResponse.json({ ok: true });
