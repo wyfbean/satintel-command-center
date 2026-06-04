@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
+import MicrosoftEntra from "next-auth/providers/microsoft-entra-id";
 import Credentials from "next-auth/providers/credentials";
 import { getSQLiteAdapter } from "@/lib/auth/sqlite-adapter";
 import { verifyPassword } from "@/lib/auth/password";
@@ -37,6 +38,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
     ...(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET
       ? [Google({ clientId: process.env.AUTH_GOOGLE_ID, clientSecret: process.env.AUTH_GOOGLE_SECRET })]
+      : []),
+
+    ...(process.env.AUTH_MICROSOFT_ENTRA_ID_ID && process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET
+      ? [MicrosoftEntra({
+          clientId:     process.env.AUTH_MICROSOFT_ENTRA_ID_ID,
+          clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET,
+          // Tenant-specific org: set AUTH_MICROSOFT_ENTRA_ID_TENANT_ID.
+          // Omit for "common" (any Microsoft/personal account) — the provider default.
+          ...(process.env.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID
+            ? { issuer: `https://login.microsoftonline.com/${process.env.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID}/v2.0` }
+            : {}),
+        })]
       : []),
   ],
 
