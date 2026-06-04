@@ -7,6 +7,8 @@ import type { DashboardData, IntelItem } from "@/types/intel";
 
 /* ── anonymous session ID ─────────────────────────────────────────── */
 
+const DWELL_THRESHOLD_MS = 10_000;  // 10 s of reading = stronger signal (+2)
+
 /** Returns a stable UUID for this browser (persisted in localStorage). */
 function getSessionId(): string {
   if (typeof window === "undefined") return "";
@@ -18,16 +20,19 @@ function getSessionId(): string {
   return id;
 }
 
-/** Fire-and-forget: POST a click event to the recommendation API. */
-function trackClick(articleId: string): void {
+/** Fire-and-forget: POST a click/dwell event to the recommendation API. */
+function trackEvent(articleId: string, weight = 1): void {
   const sid = getSessionId();
   if (!sid) return;
   fetch("/api/recommend/click", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ articleId, sid }),
+    body: JSON.stringify({ articleId, sid, weight }),
   }).catch(() => {}); // never block the UI
 }
+
+/* ── user preference type (returned by /api/recommend/prefs) ──────── */
+type PrefChip = { featureType: string; featureValue: string; weight: number };
 
 /**
  * 下沉式资讯流（合并首页的下半部分）。
@@ -60,6 +65,39 @@ export function NewsFeed({ data, activeSource, onClearSource, onSelect, onRefres
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  /* ── personalisation: dwell timer + preferences display ─────────── */
+  const openedAtRef   = useRef<number | null>(null);   // when current article was opened
+  const openedIdRef   = useRef<string | null>(null);   // id of currently open article
+  const [prefs, setPrefs] = useState<PrefChip[]>([]);
+  const [prefsOpen, setPrefsOpen] = useState(false);
+
+  // Load preferences once on mount (silent; no-op if sid absent).
+  useEffect(() => {
+    const sid = getSessionId();
+    if (!sid) return;
+    fetch(`/api/recommend/prefs?sid=${encodeURIComponent(sid)}`)
+      .then((r) => r.json())
+      .then((d: PrefChip[]) => setPrefs(d))
+      .catch(() => {});
+  }, []);
+
+  function refreshPrefs() {
+    const sid = getSessionId();
+    if (!sid) return;
+    fetch(`/api/recommend/prefs?sid=${encodeURIComponent(sid)}`)
+      .then((r) => r.json())
+      .then((d: PrefChip[]) => setPrefs(d))
+      .catch(() => {});
+  }
+
+  function resetPrefs() {
+    const sid = getSessionId();
+    if (!sid) return;
+    fetch(`/api/recommend/prefs?sid=${encodeURIComponent(sid)}`, { method: "DELETE" })
+      .then(() => setPrefs([]))
+      .catch(() => {});
+  }
 
   const resetPaging = () => setVisibleCount(PAGE_SIZE);
 
@@ -105,10 +143,30 @@ export function NewsFeed({ data, activeSource, onClearSource, onSelect, onRefres
   const visibleItems = filteredItems.slice(0, visibleCount);
 
   function select(item: IntelItem | null) {
+    // ── dwell check: was the previous article open long enough? ───────
+    if (openedIdRef.current && openedAtRef.current !== null) {
+      const dwellMs = Date.now() - openedAtRef.current;
+      if (dwellMs >= DWELL_THRESHOLD_MS) {
+        // dwell = weight 2 (stronger signal than a plain click)
+        trackEvent(openedIdRef.current, 2);
+      }
+    }
+
     setSelectedId(item?.id ?? null);
     onSelect(item);
-    // Record the click for personalised re-ranking on the next feed load.
-    if (item) trackClick(item.id);
+
+    if (item) {
+      // plain click signal (weight 1)
+      trackEvent(item.id, 1);
+      // start dwell timer
+      openedAtRef.current = Date.now();
+      openedIdRef.current = item.id;
+      // refresh prefs display after a short delay (debounced)
+      setTimeout(refreshPrefs, 600);
+    } else {
+      openedAtRef.current = null;
+      openedIdRef.current = null;
+    }
   }
 
   return (
@@ -133,6 +191,47 @@ export function NewsFeed({ data, activeSource, onClearSource, onSelect, onRefres
           })}
         </div>
       </nav>
+
+      {/* personalisation: 我的偏好 chip strip */}
+      {prefs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#ebeef3] bg-white px-4 py-2.5 text-xs shadow-[0_4px_12px_rgba(28,42,71,0.04)]">
+          <button
+            type="button"
+            onClick={() => setPrefsOpen((o) => !o)}
+            className="flex items-center gap-1.5 font-medium text-[#3d74ff] hover:text-[#2251d4] transition"
+          >
+            <span>⚡ 我的偏好</span>
+            <span className="rounded-full bg-[#eef4ff] px-1.5 py-0.5 text-[10px] font-semibold">
+              {prefs.length}
+            </span>
+            <span className="text-slate-300">{prefsOpen ? "▲" : "▼"}</span>
+          </button>
+
+          {prefsOpen && (
+            <>
+              <div className="h-3 w-px bg-[#e8ebf0]" />
+              {prefs.slice(0, 8).map((p) => (
+                <span
+                  key={`${p.featureType}:${p.featureValue}`}
+                  title={`${p.featureType} · 权重 ${p.weight}`}
+                  className="rounded-full border border-[#dbe4ff] bg-[#f4f7ff] px-2.5 py-1 text-[#2a55cc]"
+                >
+                  {p.featureValue}
+                  <span className="ml-1 text-[#93b4f0]">{p.weight.toFixed(1)}</span>
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={resetPrefs}
+                className="ml-auto rounded-full bg-[#fef2f2] px-2.5 py-1 text-red-500 hover:bg-red-50 transition"
+                title="清除所有个性化偏好"
+              >
+                重置 ✕
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* AI 来源筛选提示 */}
       {activeSource && (
