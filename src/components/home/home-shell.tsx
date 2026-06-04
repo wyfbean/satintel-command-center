@@ -2,11 +2,12 @@
 
 import "@copilotkit/react-ui/styles.css";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { CopilotKit, useCoAgent, useCopilotAction, useCopilotReadable } from "@copilotkit/react-core";
 import { CopilotPopup } from "@copilotkit/react-ui";
 
 import { SiteNav } from "@/components/site-nav";
+import { AuthButton } from "@/components/auth/auth-button";
 import { RssManager } from "@/components/dashboard/rss-manager";
 import { TrendDashboard } from "@/components/home/trend-dashboard";
 import { NewsFeed } from "@/components/home/news-feed";
@@ -35,17 +36,19 @@ const RESET_RE = /全部|所有|重置|清除|取消筛选|reset|clear|^all$/i;
 
 /* ── public export ────────────────────────────────────────────────── */
 
-export function HomeShell({ initialData }: { initialData: DashboardData }) {
+type HomeShellProps = { initialData: DashboardData; userId?: string | null; userName?: string | null };
+
+export function HomeShell({ initialData, userId = null, userName = null }: HomeShellProps) {
   return (
     <CopilotKit runtimeUrl="/api/copilotkit" agent={AGENT_NAME}>
-      <HomeWorkspace initialData={initialData} />
+      <HomeWorkspace initialData={initialData} userId={userId} userName={userName} />
     </CopilotKit>
   );
 }
 
 /* ── workspace (inside CopilotKit so hooks are available) ─────────── */
 
-function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
+function HomeWorkspace({ initialData, userId, userName }: HomeShellProps) {
   const bootData = useFrontendMock ? frontendMockDashboardData : initialData;
 
   const [feedData, setFeedData] = useState<DashboardData>(bootData);
@@ -54,6 +57,27 @@ function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
   const [briefingOverride, setBriefingOverride] = useState<BriefingSection[] | null>(null);
   const [rssOpen, setRssOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
+
+  // On first mount: if the user is authenticated, migrate any anonymous
+  // preference history from localStorage into their user UUID, then pin
+  // the localStorage key to the stable userId so refreshFeed uses it.
+  useEffect(() => {
+    if (!userId) return;
+    if (typeof window === "undefined") return;
+    const anonSid = localStorage.getItem("satintel_sid");
+    if (!anonSid || anonSid === userId) {
+      localStorage.setItem("satintel_sid", userId);
+      return;
+    }
+    fetch("/api/recommend/migrate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ anonymousSid: anonSid }),
+    })
+      .then(() => localStorage.setItem("satintel_sid", userId))
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   // Top "今日趋势" hero is driven by the AG-UI agent's STATE_SNAPSHOT, seeded
   // from the server fetch so it renders instantly without a blank flash.
@@ -150,8 +174,9 @@ function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
       return;
     }
     await fetch("/api/crawl/trigger", { method: "POST" }).catch(() => {});
-    // Pass the session ID so the server applies personalised re-ranking.
-    const sid = typeof window !== "undefined" ? (localStorage.getItem("satintel_sid") ?? "") : "";
+    // Prefer the authenticated userId (already set into localStorage by the
+    // migration effect); fall back to the anonymous localStorage UUID.
+    const sid = userId ?? (typeof window !== "undefined" ? (localStorage.getItem("satintel_sid") ?? "") : "");
     const r = await fetch(`/api/feed${sid ? `?sid=${encodeURIComponent(sid)}` : ""}`);
     const d = (await r.json()) as DashboardData;
     setFeedData(d);
@@ -170,7 +195,6 @@ function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#1a1f2e] text-sm font-semibold text-white">轨道</div>
               <div>
                 <div className="text-sm font-semibold text-slate-900">卫星情报首页</div>
-                <div className="text-xs text-slate-400">今日趋势面板 · 资讯流 · AI 追问</div>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -182,6 +206,7 @@ function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
               >
                 RSS
               </button>
+              <AuthButton userId={userId ?? null} userName={userName ?? null} />
             </div>
           </div>
         </header>

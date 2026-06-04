@@ -2,17 +2,17 @@
  * POST /api/recommend/click
  * Body: { articleId: string, sid: string, weight?: number }
  *
- * weight = 1  → plain click (user opened the article)
+ * weight = 1  → plain click (user opened the article detail panel)
  * weight = 2  → dwell     (user read ≥ DWELL_THRESHOLD_MS seconds)
  *
- * Looks up the article in the DB to extract its tags / region / source,
- * then calls recordClick() to update the session's preference weights.
- * Returns { ok: true } synchronously; the UI fires this as fire-and-forget.
+ * Authenticated users: session userId overrides the body `sid`.
+ * Anonymous users: body `sid` is used as-is (localStorage UUID fallback).
  */
 
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/intel/db";
 import { recordClick } from "@/lib/intel/reranker";
+import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -28,9 +28,14 @@ type ArticleRow = {
 
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as Body;
-  const { articleId, sid, weight = 1 } = body;
+  const { articleId, weight = 1 } = body;
 
-  if (!articleId || !sid) {
+  // Authenticated session takes priority over client-supplied sid.
+  const session      = await auth();
+  const userId       = session?.user?.id;
+  const effectiveSid = userId ?? body.sid ?? "";
+
+  if (!articleId || !effectiveSid) {
     return NextResponse.json({ ok: false, error: "articleId and sid required" }, { status: 400 });
   }
 
@@ -42,17 +47,16 @@ export async function POST(req: Request) {
     .get(articleId) as ArticleRow | undefined;
 
   if (row) {
-    // Extract entities from title for KG expansion (simple word tokens ≥ 4 chars)
     const titleText = (row.title_zh || row.title).replace(/[^\w\s]/g, " ");
     const entities  = titleText.split(/\s+/).filter((t) => t.length >= 4);
 
     recordClick(
-      sid,
+      effectiveSid,
       {
-        id:               articleId,
-        tags:             row.tags ? row.tags.split(",").filter(Boolean) : [],
-        region:           row.region,
-        sourceName:       row.source_name,
+        id:                articleId,
+        tags:              row.tags ? row.tags.split(",").filter(Boolean) : [],
+        region:            row.region,
+        sourceName:        row.source_name,
         extractedEntities: entities,
       },
       weight,

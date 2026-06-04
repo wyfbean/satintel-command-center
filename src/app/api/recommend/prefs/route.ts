@@ -5,10 +5,13 @@
  *
  * DELETE /api/recommend/prefs?sid=<uuid>
  *   Clears all stored preferences and events for this session.
+ *
+ * Authenticated users: session userId overrides the ?sid= query param.
  */
 
 import { NextResponse } from "next/server";
 import { getPreferences, clearPreferences } from "@/lib/intel/reranker";
+import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -20,12 +23,13 @@ function applyDecay(weight: number, lastUpdatedMs: number): number {
 }
 
 export async function GET(req: Request) {
-  const sid = new URL(req.url).searchParams.get("sid") ?? "";
+  const session  = await auth();
+  const userId   = session?.user?.id;
+  const sid      = userId ?? (new URL(req.url).searchParams.get("sid") ?? "");
   if (!sid) return NextResponse.json([]);
 
   const raw = getPreferences(sid);
 
-  // Return decay-adjusted weights so the UI shows realistic current strength
   const decayed = raw
     .map((p) => ({
       featureType:  p.featureType,
@@ -40,7 +44,9 @@ export async function GET(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const sid = new URL(req.url).searchParams.get("sid") ?? "";
+  const session  = await auth();
+  const userId   = session?.user?.id;
+  const sid      = userId ?? (new URL(req.url).searchParams.get("sid") ?? "");
   if (!sid) return NextResponse.json({ ok: false, error: "sid required" }, { status: 400 });
   clearPreferences(sid);
   return NextResponse.json({ ok: true });

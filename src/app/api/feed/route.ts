@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getDashboardData } from "@/lib/intel/service";
 import { ensureScheduler } from "@/lib/intel/scheduler";
 import { getPreferences, epsilonGreedy } from "@/lib/intel/reranker";
+import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -11,9 +12,12 @@ export async function GET(req: Request) {
 
   const data = await getDashboardData();
 
-  // Personalise if the client supplied a session ID (?sid=<uuid>).
+  // Personalise: authenticated userId takes priority over ?sid= query param.
   // Falls through instantly (same order) when sid is absent or prefs are empty.
-  const sid = new URL(req.url).searchParams.get("sid") ?? "";
+  const session = await auth();
+  const userId  = session?.user?.id;
+  const sid     = userId ?? (new URL(req.url).searchParams.get("sid") ?? "");
+
   if (sid) {
     const prefs = getPreferences(sid);
     if (prefs.length) {
