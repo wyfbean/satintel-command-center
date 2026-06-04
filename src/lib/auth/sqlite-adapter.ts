@@ -26,13 +26,20 @@ function rowToUser(row: UserRow) {
 export function getSQLiteAdapter(): Adapter {
   return {
     createUser(user) {
-      const db = getDb()!;
+      const db  = getDb()!;
       const id  = crypto.randomUUID();
       const now = Date.now();
+      // INSERT OR IGNORE: if the email already exists (same email, different provider)
+      // the insert is silently skipped and we return the pre-existing user row below.
       db.prepare(
-        "INSERT INTO users (id, name, email, image, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO users (id, name, email, image, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
       ).run(id, user.name ?? "", user.email ?? null, user.image ?? "", now, now);
-      return { ...rowToUser({ id, name: user.name ?? "", email: user.email ?? null, image: user.image ?? "" }) };
+      // Return the row that owns this email — either the new one or the pre-existing one.
+      // If the provider returned no email, fall back to the freshly inserted id.
+      const row = user.email
+        ? (db.prepare("SELECT id, name, email, image FROM users WHERE email = ?").get(user.email) as UserRow)
+        : (db.prepare("SELECT id, name, email, image FROM users WHERE id = ?").get(id) as UserRow);
+      return rowToUser(row);
     },
 
     getUser(id) {

@@ -37,15 +37,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
 
     ...(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET
-      ? [Google({ clientId: process.env.AUTH_GOOGLE_ID, clientSecret: process.env.AUTH_GOOGLE_SECRET })]
+      ? [Google({
+          clientId:     process.env.AUTH_GOOGLE_ID,
+          clientSecret: process.env.AUTH_GOOGLE_SECRET,
+          // Google verifies email ownership, so linking same-email accounts across
+          // providers is safe.  Without this flag NextAuth throws OAuthAccountNotLinked
+          // when the same email already exists under a different provider.
+          allowDangerousEmailAccountLinking: true,
+        })]
       : []),
 
     ...(process.env.AUTH_MICROSOFT_ENTRA_ID_ID && process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET
       ? [MicrosoftEntra({
           clientId:     process.env.AUTH_MICROSOFT_ENTRA_ID_ID,
           clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET,
-          // Tenant-specific org: set AUTH_MICROSOFT_ENTRA_ID_TENANT_ID.
-          // Omit for "common" (any Microsoft/personal account) — the provider default.
+          allowDangerousEmailAccountLinking: true,
           ...(process.env.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID
             ? { issuer: `https://login.microsoftonline.com/${process.env.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID}/v2.0` }
             : {}),
