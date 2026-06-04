@@ -22,6 +22,8 @@ type ArticleRow = {
   tags:        string;
   region:      string;
   source_name: string;
+  title:       string;
+  title_zh:    string;
 };
 
 export async function POST(req: Request) {
@@ -36,17 +38,22 @@ export async function POST(req: Request) {
   if (!db) return NextResponse.json({ ok: true }); // DB unavailable — silent no-op
 
   const row = db
-    .prepare("SELECT tags, region, source_name FROM articles WHERE id = ? LIMIT 1")
+    .prepare("SELECT tags, region, source_name, title, title_zh FROM articles WHERE id = ? LIMIT 1")
     .get(articleId) as ArticleRow | undefined;
 
   if (row) {
+    // Extract entities from title for KG expansion (simple word tokens ≥ 4 chars)
+    const titleText = (row.title_zh || row.title).replace(/[^\w\s]/g, " ");
+    const entities  = titleText.split(/\s+/).filter((t) => t.length >= 4);
+
     recordClick(
       sid,
       {
-        id:         articleId,
-        tags:       row.tags ? row.tags.split(",").filter(Boolean) : [],
-        region:     row.region,
-        sourceName: row.source_name,
+        id:               articleId,
+        tags:             row.tags ? row.tags.split(",").filter(Boolean) : [],
+        region:           row.region,
+        sourceName:       row.source_name,
+        extractedEntities: entities,
       },
       weight,
     );

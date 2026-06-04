@@ -1,7 +1,7 @@
 /**
  * Content-Based Re-ranking with click-derived user preferences.
  *
- * Algorithm (v0.2):
+ * Algorithm (v1.0 — with KG expansion):
  *   rerankedScore(item) = compositeScore(item) + boost(prefs, item)
  *
  *   boost = Σ decay(w_f) × FEATURE_WEIGHTS[type]
@@ -14,23 +14,26 @@
  *   dwell (+2)  — user read the article for ≥ DWELL_THRESHOLD_MS seconds
  *
  * Feature types extracted from each event:
- *   - tag    (0.12 each) — broad topic signal
- *   - region (0.20)      — geographic focus
- *   - source (0.08)      — source preference (weakest, editorial bias risk)
+ *   - tag      (0.12 each) — broad topic signal
+ *   - region   (0.20)      — geographic focus
+ *   - source   (0.08)      — source preference (weakest, editorial bias risk)
+ *   - satellite(0.10)      — v1.0: KG-expanded related satellite names (weight 0.5)
  *
  * boost is capped at MAX_BOOST so fresh / high-relevance content is never
  * completely buried by preference history.
  */
 
 import { getDb } from "@/lib/intel/db";
+import { findRelated } from "@/lib/intel/kg-index";
 import type { IntelItem } from "@/types/intel";
 
 /* ── tuning knobs ─────────────────────────────────────────────────── */
 
 const FEATURE_WEIGHTS: Record<string, number> = {
-  tag:    0.12,
-  region: 0.20,
-  source: 0.08,
+  tag:       0.12,
+  region:    0.20,
+  source:    0.08,
+  satellite: 0.10,   // v1.0: KG-expanded related satellite names
 };
 const MAX_BOOST        = 0.40;   // cap; compositeScore range is ~0.35–1.0
 const HALF_LIFE_DAYS   = 5;      // preferences halve every 5 days
@@ -63,14 +66,18 @@ function applyDecay(weight: number, lastUpdatedMs: number): number {
 
 function computeBoost(prefs: UserInterest[], item: IntelItem): number {
   if (!prefs.length) return 0;
+  // Pre-compute a lowercase searchable string for satellite name matching.
+  const itemText = `${item.title} ${item.extractedEntities.join(" ")}`.toLowerCase();
   let raw = 0;
   for (const p of prefs) {
     const w = applyDecay(p.weight, p.lastUpdated);
     if (w < 0.001) continue;   // effectively zero after decay — skip
     const fw = FEATURE_WEIGHTS[p.featureType] ?? 0;
-    if (p.featureType === "tag"    && item.tags.includes(p.featureValue)) raw += w * fw;
-    if (p.featureType === "region" && item.region === p.featureValue)     raw += w * fw;
-    if (p.featureType === "source" && item.sourceName === p.featureValue) raw += w * fw;
+    if (p.featureType === "tag"       && item.tags.includes(p.featureValue))   raw += w * fw;
+    if (p.featureType === "region"    && item.region === p.featureValue)        raw += w * fw;
+    if (p.featureType === "source"    && item.sourceName === p.featureValue)    raw += w * fw;
+    // satellite: match normalised satellite name against article title/entities
+    if (p.featureType === "satellite" && itemText.includes(p.featureValue))    raw += w * fw;
   }
   return Math.min(raw, MAX_BOOST);
 }
@@ -192,7 +199,13 @@ export function getPreferences(sessionId: string): UserInterest[] {
  */
 export function recordClick(
   sessionId: string,
-  article: { id: string; tags: string[]; region: string; sourceName: string },
+  article: {
+    id:               string;
+    tags:             string[];
+    region:           string;
+    sourceName:       string;
+    extractedEntities?: string[];   // v1.0: used for KG expansion
+  },
   weight = 1,
 ): void {
   const db = getDb();
@@ -215,12 +228,20 @@ export function recordClick(
     DO UPDATE SET weight = weight + excluded.weight, last_updated = excluded.last_updated
   `);
 
+  // v1.0: KG expansion — related satellite names (weight = safeW * 0.5, softer signal)
+  const kgRelated = findRelated(article.extractedEntities ?? article.tags);
+  const kgWeight  = Math.max(0.5, safeW * 0.5);
+
   const run = db.transaction(() => {
     for (const tag of article.tags.slice(0, 6)) {
       if (tag) upsert.run(sessionId, "tag", tag, safeW, now);
     }
     if (article.region)     upsert.run(sessionId, "region", article.region,     safeW, now);
     if (article.sourceName) upsert.run(sessionId, "source", article.sourceName, safeW, now);
+    // satellite expansions from KG (gentle boost for related-satellite articles)
+    for (const satName of kgRelated) {
+      upsert.run(sessionId, "satellite", satName, kgWeight, now);
+    }
   });
   run();
 }
