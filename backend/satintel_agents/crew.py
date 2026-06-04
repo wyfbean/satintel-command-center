@@ -16,7 +16,15 @@ from __future__ import annotations
 import os
 from typing import Any, Callable
 
-_MCP_SERVER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mcp_server", "server.py")
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROJECT_ROOT = os.path.dirname(_BACKEND_ROOT)
+
+# Existing image-tools MCP server (runs under backend's Python 3.13 venv)
+_MCP_SERVER = os.path.join(_BACKEND_ROOT, "mcp_server", "server.py")
+
+# KG MCP server (runs under root .venv Python 3.12 where kuzu is installed)
+_KG_SERVER = os.path.join(_PROJECT_ROOT, "kg", "kg_mcp_server.py")
+_ROOT_PYTHON = os.path.join(_PROJECT_ROOT, ".venv", "Scripts", "python.exe")
 
 Emit = Callable[[str, dict[str, Any]], None]
 
@@ -25,6 +33,12 @@ def _mcp_params():
     from mcp import StdioServerParameters  # noqa: PLC0415
 
     return StdioServerParameters(command="python", args=[_MCP_SERVER], env=os.environ.copy())
+
+
+def _kg_mcp_params():
+    from mcp import StdioServerParameters  # noqa: PLC0415
+
+    return StdioServerParameters(command=_ROOT_PYTHON, args=[_KG_SERVER], env=os.environ.copy())
 
 
 def _make_listener(emit: Emit):
@@ -58,46 +72,67 @@ def run_crew_streaming(query: str, image_ref: str | None, emit: Emit) -> None:
     listener = _make_listener(emit)  # registers handlers on instantiation
     _ = listener
 
-    with MCPServerAdapter(_mcp_params()) as mcp_tools:
-        coordinator = Agent(
-            role="任务协调员",
-            goal="拆解用户的卫星分析任务并安排合适的工具与智能体。",
-            backstory="资深卫星情报协调员，擅长把模糊请求转化为可执行的分析步骤。",
-            verbose=False,
-        )
-        image_analyst = Agent(
-            role="影像分析师",
-            goal="对卫星图像进行视觉问答与目标/区域识别。",
-            backstory="遥感影像解译专家。",
-            multimodal=True,
-            tools=list(mcp_tools),
-            verbose=False,
-        )
-        reporter = Agent(
-            role="报告员",
-            goal="综合各智能体与工具的结果，输出简洁的中文研判。",
-            backstory="情报简报撰写专家。",
-            verbose=False,
-        )
+    with MCPServerAdapter(_mcp_params()) as image_tools:
+        with MCPServerAdapter(_kg_mcp_params()) as kg_tools:
+            coordinator = Agent(
+                role="任务协调员",
+                goal="拆解用户的卫星分析任务并安排合适的工具与智能体。",
+                backstory="资深卫星情报协调员，擅长把模糊请求转化为可执行的分析步骤。",
+                verbose=False,
+            )
+            image_analyst = Agent(
+                role="影像分析师",
+                goal="对卫星图像进行视觉问答与目标/区域识别。",
+                backstory="遥感影像解译专家。",
+                multimodal=True,
+                tools=list(image_tools),
+                verbose=False,
+            )
+            data_analyst = Agent(
+                role="数据分析师",
+                goal="通过知识图谱工具查询卫星轨道参数、运营商、发射历史等结构化数据。",
+                backstory="卫星数据库专家，熟悉7500颗卫星的轨道与运营信息，擅长从知识图谱中检索精确数据。",
+                tools=list(kg_tools),
+                verbose=False,
+            )
+            reporter = Agent(
+                role="报告员",
+                goal="综合各智能体与工具的结果，输出简洁的中文研判。",
+                backstory="情报简报撰写专家。",
+                verbose=False,
+            )
 
-        image_hint = f"图像引用：{image_ref}" if image_ref else "无附带图像，使用地理/轨道工具。"
-        analyze = Task(
-            description=f"针对用户请求「{query}」进行分析。{image_hint} 调用可用的 MCP 工具获取证据。",
-            expected_output="结构化的分析证据（检测/分割/地理/轨道结果）。",
-            agent=image_analyst,
-        )
-        report = Task(
-            description="基于分析证据，输出面向操作员的中文研判与下一步建议。",
-            expected_output="简洁中文研判。",
-            agent=reporter,
-        )
+            image_hint = f"图像引用：{image_ref}" if image_ref else "无附带图像，优先使用数据查询工具。"
+            tasks = []
 
-        crew = Crew(
-            agents=[coordinator, image_analyst, reporter],
-            tasks=[analyze, report],
-            process=Process.sequential,
-            verbose=False,
-        )
-        result = crew.kickoff(inputs={"query": query, "image_ref": image_ref or ""})
-        emit("text", {"text": str(getattr(result, "raw", result))})
+            if image_ref:
+                analyze = Task(
+                    description=f"针对用户请求「{query}」进行影像分析。{image_hint} 调用影像 MCP 工具获取检测/分割证据。",
+                    expected_output="结构化的影像分析证据（检测/分割结果）。",
+                    agent=image_analyst,
+                )
+                tasks.append(analyze)
+
+            retrieve = Task(
+                description=f"针对用户请求「{query}」，通过卫星知识图谱工具检索相关卫星的轨道参数、运营商、发射信息。",
+                expected_output="结构化的卫星数据（轨道参数、运营商、发射记录等）。",
+                agent=data_analyst,
+            )
+            tasks.append(retrieve)
+
+            report = Task(
+                description="基于所有已收集的证据，输出面向操作员的中文研判与下一步建议。",
+                expected_output="简洁中文研判。",
+                agent=reporter,
+            )
+            tasks.append(report)
+
+            crew = Crew(
+                agents=[coordinator, image_analyst, data_analyst, reporter],
+                tasks=tasks,
+                process=Process.sequential,
+                verbose=False,
+            )
+            result = crew.kickoff(inputs={"query": query, "image_ref": image_ref or ""})
+            emit("text", {"text": str(getattr(result, "raw", result))})
     emit("__done__", {})
