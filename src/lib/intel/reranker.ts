@@ -90,6 +90,74 @@ export function rerank(items: IntelItem[], prefs: UserInterest[]): IntelItem[] {
   );
 }
 
+/* ── public: ε-greedy exploration ───────────────────────────────── */
+
+const EPSILON = 0.10;   // 10 % of slots go to exploration
+
+/**
+ * ε-greedy re-ranking:
+ *   (1-ε) exploitation — items ranked by personalised score (rerank)
+ *   ε     exploration  — items the user hasn't engaged with yet but that
+ *                        are editorially strong (compositeScore ≥ median)
+ *
+ * Exploration items are randomly sampled from the "low-boost tail" and
+ * interleaved at every ~(1/ε) positions in the exploitation list so they
+ * never cluster at the bottom.
+ *
+ * Falls back to rerank() when prefs are empty or the list is too short.
+ */
+export function epsilonGreedy(
+  items: IntelItem[],
+  prefs: UserInterest[],
+  epsilon = EPSILON,
+): IntelItem[] {
+  if (!prefs.length || items.length <= 4) return rerank(items, prefs);
+
+  const explorationCount = Math.max(1, Math.round(items.length * epsilon));
+
+  // Full re-ranked list (exploitation order).
+  const ranked = [...items].sort(
+    (a, b) =>
+      (b.compositeScore + computeBoost(prefs, b)) -
+      (a.compositeScore + computeBoost(prefs, a)),
+  );
+
+  // Exploration candidates: bottom 60 % of the ranked list
+  // (low preference alignment) but with compositeScore ≥ median.
+  const medianScore =
+    ranked[Math.floor(ranked.length / 2)]?.compositeScore ?? 0;
+
+  const pool = ranked
+    .slice(Math.floor(ranked.length * 0.4))
+    .filter((item) => item.compositeScore >= medianScore);
+
+  if (!pool.length) return ranked;
+
+  // Randomly shuffle the pool and pick explorationCount items.
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const explore   = shuffled.slice(0, explorationCount);
+  const exploreIds = new Set(explore.map((i) => i.id));
+
+  // Exploitation list without the exploration items.
+  const exploit = ranked.filter((i) => !exploreIds.has(i.id));
+
+  // Interleave: one exploration item every ⌊1/ε⌋ exploitation positions.
+  const step = Math.max(1, Math.round(1 / epsilon));   // 10 for ε=0.10
+  const result: IntelItem[] = [];
+  let eIdx = 0;
+
+  for (let i = 0; i < exploit.length; i++) {
+    result.push(exploit[i]);
+    if ((i + 1) % step === 0 && eIdx < explore.length) {
+      result.push(explore[eIdx++]);
+    }
+  }
+  // Append any surplus exploration items at the end.
+  while (eIdx < explore.length) result.push(explore[eIdx++]);
+
+  return result;
+}
+
 /* ── public: read preferences ────────────────────────────────────── */
 
 export function getPreferences(sessionId: string): UserInterest[] {

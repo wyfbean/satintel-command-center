@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDashboardData } from "@/lib/intel/service";
 import { ensureScheduler } from "@/lib/intel/scheduler";
-import { getPreferences, rerank } from "@/lib/intel/reranker";
+import { getPreferences, epsilonGreedy } from "@/lib/intel/reranker";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,9 @@ export async function GET(req: Request) {
   if (sid) {
     const prefs = getPreferences(sid);
     if (prefs.length) {
-      data.items = rerank(data.items, prefs);
+      // epsilonGreedy wraps rerank: (1-ε) personalised exploitation +
+      // ε random exploration of editorially-strong unseen items.
+      data.items = epsilonGreedy(data.items, prefs);
     }
   }
 
