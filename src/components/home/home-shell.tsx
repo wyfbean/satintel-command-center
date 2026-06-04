@@ -150,7 +150,9 @@ function HomeWorkspace({ initialData }: { initialData: DashboardData }) {
       return;
     }
     await fetch("/api/crawl/trigger", { method: "POST" }).catch(() => {});
-    const r = await fetch("/api/feed");
+    // Pass the session ID so the server applies personalised re-ranking.
+    const sid = typeof window !== "undefined" ? (localStorage.getItem("satintel_sid") ?? "") : "";
+    const r = await fetch(`/api/feed${sid ? `?sid=${encodeURIComponent(sid)}` : ""}`);
     const d = (await r.json()) as DashboardData;
     setFeedData(d);
     setAgentState(toAgentState(d)); // keep the AG-UI hero in sync

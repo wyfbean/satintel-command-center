@@ -5,6 +5,30 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FeedCard, cardGradient } from "@/components/dashboard/feed-card";
 import type { DashboardData, IntelItem } from "@/types/intel";
 
+/* ── anonymous session ID ─────────────────────────────────────────── */
+
+/** Returns a stable UUID for this browser (persisted in localStorage). */
+function getSessionId(): string {
+  if (typeof window === "undefined") return "";
+  const KEY = "satintel_sid";
+  const existing = localStorage.getItem(KEY);
+  if (existing) return existing;
+  const id = crypto.randomUUID();
+  localStorage.setItem(KEY, id);
+  return id;
+}
+
+/** Fire-and-forget: POST a click event to the recommendation API. */
+function trackClick(articleId: string): void {
+  const sid = getSessionId();
+  if (!sid) return;
+  fetch("/api/recommend/click", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ articleId, sid }),
+  }).catch(() => {}); // never block the UI
+}
+
 /**
  * 下沉式资讯流（合并首页的下半部分）。
  *
@@ -83,6 +107,8 @@ export function NewsFeed({ data, activeSource, onClearSource, onSelect, onRefres
   function select(item: IntelItem | null) {
     setSelectedId(item?.id ?? null);
     onSelect(item);
+    // Record the click for personalised re-ranking on the next feed load.
+    if (item) trackClick(item.id);
   }
 
   return (

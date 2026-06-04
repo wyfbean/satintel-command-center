@@ -102,6 +102,31 @@ export function getDb(): Db | null {
       );
     `);
 
+    // ── User click events (raw log, owned by reranker.ts) ───────────────
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS user_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id  TEXT    NOT NULL,
+        article_id  TEXT    NOT NULL,
+        event_type  TEXT    NOT NULL DEFAULT 'click',
+        created_at  INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS user_events_session
+        ON user_events(session_id, created_at DESC);
+    `);
+
+    // ── Aggregated user preferences (materialised from user_events) ───────
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS user_interests (
+        session_id    TEXT NOT NULL,
+        feature_type  TEXT NOT NULL,
+        feature_value TEXT NOT NULL,
+        weight        REAL NOT NULL DEFAULT 1.0,
+        last_updated  INTEGER NOT NULL,
+        PRIMARY KEY (session_id, feature_type, feature_value)
+      );
+    `);
+
     G.__satintelDb = db;
     return db;
   } catch (err) {
