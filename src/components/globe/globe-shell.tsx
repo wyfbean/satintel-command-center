@@ -274,6 +274,38 @@ export function GlobeShell() {
     [liveSats, selectedId],
   );
 
+  // Orbital ring for the selected satellite — one full revolution.
+  // We convert every sampled ECI position with the SAME (start-time) Earth-rotation
+  // angle, i.e. we "freeze" the globe under the orbit. This yields the closed loop
+  // the satellite actually traces in its orbital plane (passing through its current
+  // position), instead of a drifting ground-track that never closes and visually
+  // detaches from the marker as Earth rotates beneath it.
+  const orbitPath = useMemo<[number, number, number][]>(() => {
+    if (!selectedId) return [];
+    const satrec = satrecs.get(selectedId);
+    if (!satrec) return [];
+
+    const ORBIT_SAMPLES = 180;
+    const periodMin = (2 * Math.PI) / satrec.no; // satrec.no is mean motion in rad/min
+    const startMs = Date.now();
+    const gmst = satellite.gstime(new Date(startMs));
+    const points: [number, number, number][] = [];
+
+    for (let i = 0; i <= ORBIT_SAMPLES; i++) {
+      const t = new Date(startMs + (i / ORBIT_SAMPLES) * periodMin * 60_000);
+      const pv = satellite.propagate(satrec, t);
+      const eci = pv && typeof pv === "object" ? (pv as { position?: unknown }).position : undefined;
+      if (!eci || typeof eci !== "object") continue;
+      const geo = satellite.eciToGeodetic(eci as satellite.EciVec3<number>, gmst);
+      points.push([
+        satellite.degreesLat(geo.latitude),
+        satellite.degreesLong(geo.longitude),
+        geo.height,
+      ]);
+    }
+    return points;
+  }, [selectedId, satrecs]);
+
   // Reusable small geometry for CSV satellites; larger for flagship.
   const geoSmall   = useMemo(() => new THREE.SphereGeometry(0.8, 6, 6), []);
   const geoBig     = useMemo(() => new THREE.SphereGeometry(2.0, 12, 12), []);
@@ -349,6 +381,14 @@ export function GlobeShell() {
               }}
               objectThreeObject={makeObject}
               onObjectClick={(d: object) => setSelectedId((d as GlobeSat).id)}
+              pathsData={selected ? [orbitPath] : []}
+              pathPoints={(d: object) => d as [number, number, number][]}
+              pathPointLat={(p: object) => (p as [number, number, number])[0]}
+              pathPointLng={(p: object) => (p as [number, number, number])[1]}
+              pathPointAlt={(p: object) => (p as [number, number, number])[2] / EARTH_RADIUS_KM}
+              pathColor={() => (selected ? `${selected.color}cc` : "#ffffff")}
+              pathStroke={selected?.flagship ? 1.4 : 1}
+              pathTransitionDuration={0}
             />
             {loading && (
               <div className="pointer-events-none absolute right-4 top-4 rounded-xl bg-black/60 px-3 py-1.5 text-xs text-amber-300 backdrop-blur">
@@ -477,6 +517,10 @@ export function GlobeShell() {
                       <Row k="运营方性质" v={(selected as { users?: string }).users ?? ""} />
                     )}
                   </dl>
+                  <p className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-400">
+                    <span className="inline-block h-0.5 w-4 rounded-full" style={{ background: selected.color }} />
+                    地球上已用同色实线标出该卫星的完整轨道环线
+                  </p>
                 </div>
               ) : (
                 <p className="text-xs text-slate-400">点击地球上的卫星查看详情。</p>

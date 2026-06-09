@@ -9,11 +9,10 @@ import { CopilotPopup } from "@copilotkit/react-ui";
 import { SiteNav } from "@/components/site-nav";
 import { AuthButton } from "@/components/auth/auth-button";
 import { RssManager } from "@/components/dashboard/rss-manager";
-import { TrendDashboard } from "@/components/home/trend-dashboard";
 import { NewsFeed } from "@/components/home/news-feed";
 import { frontendMockDashboardData } from "@/lib/mock/frontend-dashboard";
 import type { DashboardAgentState } from "@/lib/a2a/dashboard-agent";
-import type { BriefingSection, DashboardData, IntelItem } from "@/types/intel";
+import type { DashboardData, IntelItem } from "@/types/intel";
 
 const AGENT_NAME = "satellite_dashboard";
 const useFrontendMock = process.env.NEXT_PUBLIC_FEED_MODE === "mock";
@@ -54,7 +53,6 @@ function HomeWorkspace({ initialData, userId, userName }: HomeShellProps) {
   const [feedData, setFeedData] = useState<DashboardData>(bootData);
   const [activeSource, setActiveSource] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<IntelItem | null>(null);
-  const [briefingOverride, setBriefingOverride] = useState<BriefingSection[] | null>(null);
   const [rssOpen, setRssOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
 
@@ -111,27 +109,6 @@ function HomeWorkspace({ initialData, userId, userName }: HomeShellProps) {
     },
   });
 
-  // Chat-driven 情报简报 optimisation: the backend LLM rewrites the briefing and
-  // pushes it here, where it overrides the snapshot briefing in the hero panel.
-  useCopilotAction({
-    name: "updateBriefing",
-    description: "用优化后的内容更新顶部「情报简报」面板。",
-    parameters: [
-      {
-        name: "sections",
-        type: "object[]",
-        description: "简报段落列表",
-        attributes: [
-          { name: "heading", type: "string", description: "段落标题" },
-          { name: "body", type: "string", description: "段落正文" },
-        ],
-      },
-    ],
-    handler: ({ sections }: { sections: BriefingSection[] }) => {
-      if (Array.isArray(sections) && sections.length) setBriefingOverride(sections);
-    },
-  });
-
   // chat-to-widget: render any tool call inline in the chat popup.
   useCopilotAction({
     name: "*",
@@ -166,7 +143,6 @@ function HomeWorkspace({ initialData, userId, userName }: HomeShellProps) {
   });
 
   async function refreshFeed() {
-    setBriefingOverride(null); // a fresh crawl supersedes any chat-optimised briefing
     if (useFrontendMock) {
       setFeedData(frontendMockDashboardData);
       setAgentState(toAgentState(frontendMockDashboardData));
@@ -213,10 +189,7 @@ function HomeWorkspace({ initialData, userId, userName }: HomeShellProps) {
 
         <RssManager open={rssOpen} onClose={() => setRssOpen(false)} onChanged={() => void refreshFeed()} />
 
-        {/* top: AG-UI driven trend dashboard */}
-        <TrendDashboard state={agentState} briefingOverride={briefingOverride} />
-
-        {/* sunken: news feed */}
+        {/* news feed */}
         <NewsFeed
           data={feedData}
           activeSource={activeSource}
