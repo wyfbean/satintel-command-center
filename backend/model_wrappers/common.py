@@ -72,7 +72,22 @@ def envelope(
 
 
 def resolve_image(image: str) -> Path:
-    """Return a local Path for `image`, downloading http(s)/file URLs to a temp file."""
+    """Return a local Path for `image`, downloading http(s)/file URLs or decoding
+    `data:` URLs (inline base64, as sent by the /orchestration image-upload UI) to
+    a temp file under OUTPUT_DIR."""
+    if image.startswith("data:"):
+        import base64  # noqa: PLC0415
+
+        header, _, b64data = image.partition(",")
+        ext = ".jpg"
+        if "image/png" in header:
+            ext = ".png"
+        elif "image/webp" in header:
+            ext = ".webp"
+        dest = OUTPUT_DIR / f"_input_{abs(hash(image))}{ext}"
+        if not dest.exists():
+            dest.write_bytes(base64.b64decode(b64data))
+        return dest
     if image.startswith("http://") or image.startswith("https://"):
         dest = OUTPUT_DIR / f"_input_{abs(hash(image))}{Path(image).suffix or '.jpg'}"
         if not dest.exists():

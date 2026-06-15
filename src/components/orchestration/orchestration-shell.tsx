@@ -59,15 +59,19 @@ function OrchestrationWorkspace({ agent, onAgentChange }: { agent: AgentKey; onA
     name: "*",
     render: ({ name, args, status, result }: { name: string; args: unknown; status: string; result: unknown }) => {
       if (status === "inProgress") {
-        setToolLog((p) => {
+        // Defer past the current render/effect pass — CopilotKit invokes this render
+        // callback from inside its own useEffect, so a synchronous setState here
+        // triggers React's "update while rendering a different component" warning.
+        queueMicrotask(() => setToolLog((p) => {
           if (p.some((t) => t.name === name && t.status === "pending")) return p;
           return [{ id: `${Date.now()}_${name}`, name, status: "pending", result: null }, ...p.slice(0, 19)];
-        });
+        }));
       }
       if (status === "complete") {
-        setToolLog((p) =>
-          p.map((t) => (t.name === name && t.status === "pending") ? { ...t, status: "complete", result } : t),
-        );
+        queueMicrotask(() => setToolLog((p) => {
+          if (!p.some((t) => t.name === name && t.status === "pending")) return p;
+          return p.map((t) => (t.name === name && t.status === "pending") ? { ...t, status: "complete", result } : t);
+        }));
       }
       return <ToolCard name={name} args={args} status={status} result={result} image={image?.dataUrl ?? null} />;
     },
