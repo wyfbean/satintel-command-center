@@ -127,6 +127,36 @@ export function getDb(): Db | null {
       );
     `);
 
+    // ── Globe satellite catalog (seeded from satellite.csv) ──────────────
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS globe_satellites (
+        norad_id     INTEGER PRIMARY KEY,
+        alt_name     TEXT NOT NULL DEFAULT '',
+        name         TEXT NOT NULL DEFAULT '',
+        country_org  TEXT NOT NULL DEFAULT '',
+        country      TEXT NOT NULL DEFAULT '',
+        agency       TEXT NOT NULL DEFAULT '',
+        users        TEXT NOT NULL DEFAULT '',
+        purpose      TEXT NOT NULL DEFAULT '',
+        detail_purpose TEXT NOT NULL DEFAULT '',
+        orbit_class  TEXT NOT NULL DEFAULT 'LEO',
+        orbit_type   TEXT NOT NULL DEFAULT '',
+        longitude_geo REAL NOT NULL DEFAULT 0,
+        perigee_km   REAL NOT NULL DEFAULT 0,
+        apogee_km    REAL NOT NULL DEFAULT 0,
+        eccentricity REAL NOT NULL DEFAULT 0,
+        inclination  REAL NOT NULL DEFAULT 0,
+        period_min   REAL NOT NULL DEFAULT 0,
+        launch_year  INTEGER NOT NULL DEFAULT 2000,
+        cospar       TEXT NOT NULL DEFAULT '',
+        color        TEXT NOT NULL DEFAULT '#64748b'
+      );
+      CREATE INDEX IF NOT EXISTS globe_sat_orbit   ON globe_satellites(orbit_class);
+      CREATE INDEX IF NOT EXISTS globe_sat_purpose ON globe_satellites(purpose);
+      CREATE INDEX IF NOT EXISTS globe_sat_users   ON globe_satellites(users);
+      CREATE INDEX IF NOT EXISTS globe_sat_country ON globe_satellites(country);
+    `);
+
     // ── Authenticated users (OAuth + email/password) ─────────────────────
     db.exec(`
       CREATE TABLE IF NOT EXISTS users (

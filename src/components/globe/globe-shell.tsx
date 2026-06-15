@@ -32,7 +32,6 @@ type GlobeSat = {
   noradId?: number;
   color: string;
   flagship: boolean;
-  /** runtime propagated fields */
   lat: number;
   lng: number;
   altKm: number;
@@ -41,7 +40,7 @@ type GlobeSat = {
 
 /* ── filter constants ────────────────────────────────────────────── */
 
-const ORBIT_CLASSES  = ["全部", "LEO", "MEO", "GEO", "HEO", "Elliptical"];
+const ORBIT_CLASSES = ["全部", "LEO", "MEO", "GEO", "HEO", "Elliptical"];
 const PURPOSES = [
   "全部",
   "Earth Observation",
@@ -54,34 +53,78 @@ const PURPOSES = [
 ];
 const USER_TYPES = ["全部", "Commercial", "Government", "Military", "Civil"];
 
-/* ── hook: CSV satellite loader (fetch once, filter client-side) ──── */
+/* ── fast Keplerian position (~0.005 ms/sat, ~38 ms for 7 500) ───── */
+
+const MU = 398600.4418; // km³/s²
+
+function keplerianPos(
+  perigeeKm: number,
+  apogeeKm: number,
+  inclinationDeg: number,
+  noradId: number,
+  periodMin: number,
+  now: Date,
+): { lat: number; lng: number; altKm: number } | null {
+  const altKm = (perigeeKm + apogeeKm) / 2;
+  if (altKm < 100) return null;
+
+  const period = periodMin > 0
+    ? periodMin
+    : (2 * Math.PI * Math.sqrt(Math.pow(EARTH_RADIUS_KM + altKm, 3) / MU)) / 60;
+
+  const incRad = inclinationDeg * (Math.PI / 180);
+
+  // Deterministic initial angles — golden-angle spread (same as TLE builder)
+  const raan0 = ((noradId * 137.508) % 360) * (Math.PI / 180);
+  const m0    = ((noradId * 137.508 * 2.236) % 360) * (Math.PI / 180);
+
+  const tMin       = now.getTime() / 60000;
+  const meanMotion = (2 * Math.PI) / period;
+  const M          = m0 + meanMotion * tMin;
+
+  const cosM = Math.cos(M), sinM = Math.sin(M);
+  const cosR = Math.cos(raan0), sinR = Math.sin(raan0);
+  const cosI = Math.cos(incRad), sinI = Math.sin(incRad);
+
+  const xEci = cosM * cosR - sinM * cosI * sinR;
+  const yEci = cosM * sinR + sinM * cosI * cosR;
+  const zEci = sinM * sinI;
+
+  const gmst   = satellite.gstime(now);
+  const lat    = Math.asin(Math.max(-1, Math.min(1, zEci))) * (180 / Math.PI);
+  const lngEci = Math.atan2(yEci, xEci);
+  const lngGeo = lngEci - gmst;
+  const lngDeg = ((lngGeo * (180 / Math.PI)) % 360 + 360) % 360;
+
+  return { lat, lng: lngDeg > 180 ? lngDeg - 360 : lngDeg, altKm };
+}
+
+/* ── hook: load all satellites from SQLite-backed API ─────────────── */
 
 function useCsvSatellites() {
-  const [all, setAll] = useState<CsvSatellite[]>([]);
+  const [all, setAll]         = useState<CsvSatellite[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     setLoading(true);
-    // Fetch a representative sample (no filters) once on mount.
-    // All filtering happens client-side so the count genuinely changes.
-    fetch("/api/satellites?limit=500")
+    fetch("/api/satellites")
       .then((r) => r.json())
       .then((d: CsvSatellite[]) => setAll(d))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []); // intentionally empty — load once
+  }, []);
 
   return { all, loading };
 }
 
-/** Derive orbit class from mean motion (rev/day). */
+/* ── small helpers ───────────────────────────────────────────────── */
+
 function flagshipOrbitClass(mm: number): "LEO" | "MEO" | "GEO" {
   if (mm > 5)   return "LEO";
   if (mm > 1.1) return "MEO";
   return "GEO";
 }
 
-/** Map CSV purpose (English) to flagship category (Chinese). */
 const PURPOSE_TO_CATEGORY: Record<string, string> = {
   "Earth Observation":      "对地观测",
   "Communications":         "通信",
@@ -92,36 +135,26 @@ const PURPOSE_TO_CATEGORY: Record<string, string> = {
   "Technology Development": "",
 };
 
-/** Human-readable Chinese label for a CSV purpose value (filter chips + detail). */
 function purposeZh(p: string): string {
   const map: Record<string, string> = {
-    "Earth Observation": "对地观测",
-    "Communications": "通信",
-    "Navigation": "导航",
+    "Earth Observation":      "对地观测",
+    "Communications":         "通信",
+    "Navigation":             "导航",
     "Technology Development": "技术研发",
-    "Earth Science": "地球科学",
-    "Space Science": "空间科学",
-    "Meteorology": "气象",
+    "Earth Science":          "地球科学",
+    "Space Science":          "空间科学",
+    "Meteorology":            "气象",
   };
   return map[p] ?? p;
 }
 
-/** Human-readable Chinese label for a CSV users (operator type) value. */
 function usersZh(u: string): string {
   const map: Record<string, string> = {
-    Commercial: "商业",
-    Government: "政府",
-    Military: "军事",
-    Civil: "民用",
+    Commercial: "商业", Government: "政府", Military: "军事", Civil: "民用",
   };
   return map[u] ?? u;
 }
 
-/**
- * Chinese label for a CSV country/operator value. The CSV uses a bounded set of
- * English country names; this dict covers the common ones. Unmapped tail values
- * (rare multi-country combos) fall back to the original string.
- */
 const COUNTRY_ZH: Record<string, string> = {
   USA: "美国", "United States": "美国",
   "United Kingdom": "英国", China: "中国", Russia: "俄罗斯", Japan: "日本",
@@ -151,12 +184,11 @@ function countryZh(c: string): string {
 /* ── main component ──────────────────────────────────────────────── */
 
 export function GlobeShell() {
-  const [tick, setTick]     = useState(0);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [size, setSize]     = useState({ width: 800, height: 560 });
-  const containerRef        = useRef<HTMLDivElement>(null);
+  const [tick, setTick]               = useState(0);
+  const [selectedId, setSelectedId]   = useState<string | null>(null);
+  const [size, setSize]               = useState({ width: 800, height: 560 });
+  const containerRef                  = useRef<HTMLDivElement>(null);
 
-  // Filter state
   const [orbitClass,    setOrbitClass]    = useState("全部");
   const [purposeFilter, setPurposeFilter] = useState("全部");
   const [usersFilter,   setUsersFilter]   = useState("全部");
@@ -165,47 +197,37 @@ export function GlobeShell() {
 
   const { all: allCsvSats, loading } = useCsvSatellites();
 
-  // ── Client-side filtering ──────────────────────────────────────────
-  // Filtering happens here (not in the API) so the count genuinely
-  // changes — if the API sampled 500 items, filtering LEO vs GEO vs "全部"
-  // would all return 500 (same count). Filtering the local 500-item
-  // representative sample gives proportional subsets.
-
+  // ── Client-side filtering ────────────────────────────────────────────
   const csvSats = useMemo(() => {
     const q = countrySearch.trim().toLowerCase();
     return allCsvSats.filter((s) => {
-      if (orbitClass !== "全部"    && s.orbitClass !== orbitClass)    return false;
-      if (purposeFilter !== "全部" && s.purpose   !== purposeFilter)  return false;
-      if (usersFilter !== "全部"   && s.users     !== usersFilter)    return false;
+      if (orbitClass !== "全部"    && s.orbitClass !== orbitClass)   return false;
+      if (purposeFilter !== "全部" && s.purpose   !== purposeFilter) return false;
+      if (usersFilter !== "全部"   && s.users     !== usersFilter)   return false;
       if (q && !s.country.toLowerCase().includes(q) && !countryZh(s.country).includes(q)) return false;
       return true;
     });
   }, [allCsvSats, orbitClass, purposeFilter, usersFilter, countrySearch]);
 
-  // Filter flagship catalog by the same active filters.
   const filteredFlagships = useMemo(() => {
     if (!showFlagships) return [];
     const q = countrySearch.trim().toLowerCase();
     const purposeCat = purposeFilter !== "全部" ? PURPOSE_TO_CATEGORY[purposeFilter] : null;
     return satelliteCatalog.filter((sat) => {
       if (orbitClass !== "全部") {
-        const oc = flagshipOrbitClass(sat.orbit.meanMotionRevPerDay);
-        if (oc !== orbitClass) return false;
+        if (flagshipOrbitClass(sat.orbit.meanMotionRevPerDay) !== orbitClass) return false;
       }
-      // purposeCat is "" for "Technology Development" → no flagship matches → hide
       if (purposeCat !== null) {
         if (!purposeCat) return false;
         if ((sat as unknown as { category: string }).category !== purposeCat) return false;
       }
       if (q && !sat.country.toLowerCase().includes(q)) return false;
-      // usersFilter: flagship catalog has no users field — hide when filtering
-      // to "Commercial" (flagships are government/civil), but keep for others.
       if (usersFilter === "Commercial") return false;
       return true;
     });
   }, [showFlagships, orbitClass, purposeFilter, usersFilter, countrySearch]);
 
-  // Parse TLEs once — stable across ticks. Re-parse only when data changes.
+  // Parse TLEs once for orbit-ring rendering (SGP4 on selected sat only)
   const satrecs = useMemo(() => {
     const map = new Map<string, ReturnType<typeof satellite.twoline2satrec>>();
     for (const sat of satelliteCatalog) {
@@ -215,14 +237,29 @@ export function GlobeShell() {
       map.set(sat.id, satellite.twoline2satrec(sat.tle.line1, sat.tle.line2));
     }
     return map;
-  }, [allCsvSats]);   // parse all TLEs once; filtering doesn't need reparsing
+  }, [allCsvSats]);
 
+  // ── Stable mutable objects for CSV satellites ─────────────────────────
+  // Keeping stable references means ThreeGlobe reuses existing Three.js meshes
+  // on every tick (just repositioning them) instead of recreating all 7 500.
+  const csvSatStable = useRef<GlobeSat[]>([]);
+
+  // When the filtered CSV sat list changes (filter applied), sync stable objects.
   useEffect(() => {
-    // Slower tick for large sets to keep GPU happy.
-    const ms = csvSats.length > 200 ? 2000 : 1000;
+    const prev = new Map(csvSatStable.current.map((o) => [o.id, o]));
+    csvSatStable.current = csvSats.map((sat) => {
+      const existing = prev.get(sat.id);
+      if (existing) return existing; // keep the same object reference
+      return { ...sat, lat: 0, lng: 0, altKm: 0, flagship: false } as unknown as GlobeSat;
+    });
+  }, [csvSats]);
+
+  // Tick interval: slower for large catalogs
+  useEffect(() => {
+    const ms = allCsvSats.length > 2000 ? 5000 : allCsvSats.length > 200 ? 2000 : 1000;
     const t = setInterval(() => setTick((v) => v + 1), ms);
     return () => clearInterval(t);
-  }, [csvSats.length]);
+  }, [allCsvSats.length]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -234,106 +271,174 @@ export function GlobeShell() {
     return () => obs.disconnect();
   }, []);
 
-  // Propagate all visible satellites.
-  const liveSats = useMemo<(GlobeSat)[]>(() => {
-    const now = new Date();
+  // ── Flagship satellites — SGP4, fresh each tick (small count) ─────────
+  const liveFlagships = useMemo<GlobeSat[]>(() => {
+    const now  = new Date();
     const gmst = satellite.gstime(now);
-
-    function propagate(id: string): { lat: number; lng: number; altKm: number } | null {
-      const satrec = satrecs.get(id);
-      if (!satrec) return null;
-      const pv = satellite.propagate(satrec, now);
-      const eci = pv && typeof pv === "object" ? (pv as { position?: unknown }).position : undefined;
-      if (!eci || typeof eci !== "object") return null;
-      const geo = satellite.eciToGeodetic(eci as satellite.EciVec3<number>, gmst);
-      return { lat: satellite.degreesLat(geo.latitude), lng: satellite.degreesLong(geo.longitude), altKm: geo.height };
-    }
-
     const result: GlobeSat[] = [];
-
-    // Flagship satellites: filtered by the active filter set.
     for (const sat of filteredFlagships) {
-      const pos = propagate(sat.id);
-      if (!pos) continue;
-      result.push({ ...sat, ...pos, flagship: true } as unknown as GlobeSat);
-    }
-
-    // CSV satellites (already filtered client-side).
-    for (const sat of csvSats) {
-      const pos = propagate(sat.id);
-      if (!pos) continue;
-      result.push({ ...sat, ...pos, flagship: false } as unknown as GlobeSat);
-    }
-
-    return result;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick, satrecs, filteredFlagships, csvSats]);
-
-  const selected = useMemo(
-    () => liveSats.find((s) => s.id === selectedId) ?? null,
-    [liveSats, selectedId],
-  );
-
-  // Orbital ring for the selected satellite — one full revolution.
-  // We convert every sampled ECI position with the SAME (start-time) Earth-rotation
-  // angle, i.e. we "freeze" the globe under the orbit. This yields the closed loop
-  // the satellite actually traces in its orbital plane (passing through its current
-  // position), instead of a drifting ground-track that never closes and visually
-  // detaches from the marker as Earth rotates beneath it.
-  const orbitPath = useMemo<[number, number, number][]>(() => {
-    if (!selectedId) return [];
-    const satrec = satrecs.get(selectedId);
-    if (!satrec) return [];
-
-    const ORBIT_SAMPLES = 180;
-    const periodMin = (2 * Math.PI) / satrec.no; // satrec.no is mean motion in rad/min
-    const startMs = Date.now();
-    const gmst = satellite.gstime(new Date(startMs));
-    const points: [number, number, number][] = [];
-
-    for (let i = 0; i <= ORBIT_SAMPLES; i++) {
-      const t = new Date(startMs + (i / ORBIT_SAMPLES) * periodMin * 60_000);
-      const pv = satellite.propagate(satrec, t);
+      const satrec = satrecs.get(sat.id);
+      if (!satrec) continue;
+      const pv  = satellite.propagate(satrec, now);
       const eci = pv && typeof pv === "object" ? (pv as { position?: unknown }).position : undefined;
       if (!eci || typeof eci !== "object") continue;
       const geo = satellite.eciToGeodetic(eci as satellite.EciVec3<number>, gmst);
-      points.push([
-        satellite.degreesLat(geo.latitude),
-        satellite.degreesLong(geo.longitude),
-        geo.height,
-      ]);
+      result.push({
+        ...sat,
+        lat:      satellite.degreesLat(geo.latitude),
+        lng:      satellite.degreesLong(geo.longitude),
+        altKm:    geo.height,
+        flagship: true,
+      } as unknown as GlobeSat);
+    }
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick, satrecs, filteredFlagships]);
+
+  // ── CSV satellites — Keplerian, mutate stable refs in-place ───────────
+  // Shallow copy gives ThreeGlobe a new array reference (so it re-evaluates
+  // objectLat/Lng/Altitude) while the SAME datum references mean it reuses
+  // existing Three.js meshes rather than recreating them.
+  const liveCsvSats = useMemo<GlobeSat[]>(() => {
+    const now = new Date();
+    for (const obj of csvSatStable.current) {
+      const s = obj as CsvSatellite & GlobeSat;
+      const pos = keplerianPos(s.perigeeKm, s.apogeeKm, s.inclinationDeg, s.noradId, s.periodMin, now);
+      if (pos) { obj.lat = pos.lat; obj.lng = pos.lng; obj.altKm = pos.altKm; }
+    }
+    return [...csvSatStable.current]; // new array, same item refs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick]);
+
+  // Combined list for objectsData
+  const allLiveSats = useMemo<GlobeSat[]>(
+    () => [...liveFlagships, ...liveCsvSats],
+    [liveFlagships, liveCsvSats],
+  );
+
+  const selected = useMemo(
+    () => allLiveSats.find((s) => s.id === selectedId) ?? null,
+    [allLiveSats, selectedId],
+  );
+
+  // Orbital ring — must use the SAME propagation method as the displayed dot.
+  // Flagship sats use SGP4 for both position and ring (consistent).
+  // CSV sats use Keplerian for both: the TLE epoch (2026-day-80) differs from the
+  // Unix-epoch reference used by keplerianPos, so SGP4 ring ≠ Keplerian dot.
+  // Frozen gmst closes the ring: all samples share the same Earth-rotation angle,
+  // producing the orbital plane ring rather than a drifting ground track.
+  const orbitPath = useMemo<[number, number, number][]>(() => {
+    if (!selectedId) return [];
+
+    const sat = allLiveSats.find((s) => s.id === selectedId);
+    const ORBIT_SAMPLES = 180;
+
+    // ── Flagship: SGP4 ──────────────────────────────────────────────────
+    if (!sat || sat.flagship) {
+      const satrec = satrecs.get(selectedId);
+      if (!satrec) return [];
+      const periodMin = (2 * Math.PI) / satrec.no;
+      const startMs   = Date.now();
+      const gmst      = satellite.gstime(new Date(startMs));
+      const points: [number, number, number][] = [];
+      for (let i = 0; i <= ORBIT_SAMPLES; i++) {
+        const t   = new Date(startMs + (i / ORBIT_SAMPLES) * periodMin * 60_000);
+        const pv  = satellite.propagate(satrec, t);
+        const eci = pv && typeof pv === "object" ? (pv as { position?: unknown }).position : undefined;
+        if (!eci || typeof eci !== "object") continue;
+        const geo = satellite.eciToGeodetic(eci as satellite.EciVec3<number>, gmst);
+        points.push([satellite.degreesLat(geo.latitude), satellite.degreesLong(geo.longitude), geo.height]);
+      }
+      return points;
+    }
+
+    // ── CSV: Keplerian (matches keplerianPos display) ───────────────────
+    const s       = sat as CsvSatellite & GlobeSat;
+    const altKm   = (s.perigeeKm + s.apogeeKm) / 2;
+    const period  = s.periodMin > 0
+      ? s.periodMin
+      : (2 * Math.PI * Math.sqrt(Math.pow(EARTH_RADIUS_KM + altKm, 3) / MU)) / 60;
+    const incRad  = s.inclinationDeg * (Math.PI / 180);
+    const raan0   = ((s.noradId * 137.508) % 360) * (Math.PI / 180);
+    const m0      = ((s.noradId * 137.508 * 2.236) % 360) * (Math.PI / 180);
+    const mm      = (2 * Math.PI) / period; // rad/min
+    const tMinNow = Date.now() / 60000;
+    // Freeze gmst at "now" so all samples use the same Earth-rotation angle
+    const gmstFrozen = satellite.gstime(new Date(Date.now()));
+    const cosR = Math.cos(raan0), sinR = Math.sin(raan0);
+    const cosI = Math.cos(incRad), sinI = Math.sin(incRad);
+
+    const points: [number, number, number][] = [];
+    for (let i = 0; i <= ORBIT_SAMPLES; i++) {
+      const M    = m0 + mm * (tMinNow + (i / ORBIT_SAMPLES) * period);
+      const cosM = Math.cos(M), sinM = Math.sin(M);
+      const xEci = cosM * cosR - sinM * cosI * sinR;
+      const yEci = cosM * sinR + sinM * cosI * cosR;
+      const zEci = sinM * sinI;
+      const lat    = Math.asin(Math.max(-1, Math.min(1, zEci))) * (180 / Math.PI);
+      const lngEci = Math.atan2(yEci, xEci);
+      const lngGeo = lngEci - gmstFrozen;
+      const lngDeg = ((lngGeo * (180 / Math.PI)) % 360 + 360) % 360;
+      points.push([lat, lngDeg > 180 ? lngDeg - 360 : lngDeg, altKm]);
     }
     return points;
-  }, [selectedId, satrecs]);
+  }, [selectedId, allLiveSats, satrecs]);
 
-  // Reusable small geometry for CSV satellites; larger for flagship.
-  const geoSmall   = useMemo(() => new THREE.SphereGeometry(0.8, 6, 6), []);
-  const geoBig     = useMemo(() => new THREE.SphereGeometry(2.0, 12, 12), []);
+  // ── Three.js geometry + material caches ───────────────────────────────
+  // geoSmall is shared across ALL csv satellite meshes (no per-sat geometry).
+  // Materials are cached per color string (at most ~10 unique colors).
+  const geoSmall = useMemo(() => new THREE.SphereGeometry(0.5, 4, 4), []);
+  const geoBig   = useMemo(() => new THREE.SphereGeometry(2.0, 12, 12), []);
+  const matCache = useRef(new Map<string, THREE.MeshBasicMaterial>());
+
+  function getBasicMat(color: string) {
+    let mat = matCache.current.get(color);
+    if (!mat) {
+      mat = new THREE.MeshBasicMaterial({ color });
+      matCache.current.set(color, mat);
+    }
+    return mat;
+  }
+
+  // Mesh ref map so we can update scale on selection without recreating objects.
+  const meshRefs = useRef(new Map<string, THREE.Mesh>());
 
   const makeObject = useCallback((d: object) => {
     const sat = d as GlobeSat;
-    const isSelected = sat.id === selectedId;
-    const geo = sat.flagship ? geoBig : geoSmall;
-    const mat = new THREE.MeshLambertMaterial({
-      color: sat.color,
-      emissive: new THREE.Color(sat.color),
-      emissiveIntensity: isSelected ? 1.0 : sat.flagship ? 0.5 : 0.2,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.scale.setScalar(isSelected ? 1.6 : 1);
+    let mesh: THREE.Mesh;
+    if (sat.flagship) {
+      const mat = new THREE.MeshLambertMaterial({
+        color: sat.color,
+        emissive: new THREE.Color(sat.color),
+        emissiveIntensity: 0.5,
+      });
+      mesh = new THREE.Mesh(geoBig, mat);
+    } else {
+      mesh = new THREE.Mesh(geoSmall, getBasicMat(sat.color));
+    }
+    meshRefs.current.set(sat.id, mesh);
     return mesh;
-  }, [selectedId, geoBig, geoSmall]);
+    // makeObject must NOT depend on selectedId — it's called once per new datum,
+    // not on every re-render. Selection highlight is applied in the useEffect below.
+  }, [geoBig, geoSmall]);
 
-  // Country chips derived from visible CSV data.
+  // Update selection scale on all cached meshes when selectedId changes.
+  useEffect(() => {
+    meshRefs.current.forEach((mesh, id) => {
+      mesh.scale.setScalar(id === selectedId ? 2.0 : 1.0);
+    });
+  }, [selectedId]);
+
+  // Country chips
   const countryCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const s of csvSats) m.set(s.country, (m.get(s.country) ?? 0) + 1);
     return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 15);
   }, [csvSats]);
 
-  const totalVisible    = liveSats.length;
-  const csvVisible      = liveSats.filter((s) => !s.flagship).length;
-  const flagshipVisible = liveSats.filter((s) => s.flagship).length;
+  const totalVisible    = allLiveSats.length;
+  const csvVisible      = liveCsvSats.length;
+  const flagshipVisible = liveFlagships.length;
   const hasActiveFilter =
     orbitClass !== "全部" || purposeFilter !== "全部" ||
     usersFilter !== "全部" || countrySearch.trim().length > 0;
@@ -342,7 +447,6 @@ export function GlobeShell() {
     <main className="min-h-screen bg-[#05070f] px-4 py-6 text-slate-100 sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-[1760px] flex-col gap-5">
 
-        {/* ── header ── */}
         <header className="rounded-[28px] border border-white/10 bg-white/[0.03] p-5 backdrop-blur">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
@@ -351,8 +455,8 @@ export function GlobeShell() {
                 {loading
                   ? "加载中…"
                   : hasActiveFilter
-                    ? `筛选结果：${totalVisible} 颗（${csvVisible} CSV · ${flagshipVisible} 旗舰），样本共 ${allCsvSats.length + satelliteCatalog.length} 颗`
-                    : `${totalVisible} 颗可见（${csvVisible} CSV · ${flagshipVisible} 旗舰）`
+                    ? `筛选结果：${totalVisible} 颗（${csvVisible} 颗 · ${flagshipVisible} 旗舰），共 ${allCsvSats.length + satelliteCatalog.length} 颗`
+                    : `${totalVisible} 颗可见（${csvVisible} 颗 · ${flagshipVisible} 旗舰）`
                 }
                 {" · "}react-globe.gl · satellite.js SGP4
               </div>
@@ -362,7 +466,6 @@ export function GlobeShell() {
         </header>
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-          {/* ── globe ── */}
           <div ref={containerRef}
             className="relative h-[72vh] overflow-hidden rounded-[28px] border border-white/10 bg-black">
             <Globe
@@ -371,16 +474,20 @@ export function GlobeShell() {
               globeImageUrl={GLOBE_TEXTURE}
               backgroundImageUrl={NIGHT_BG}
               backgroundColor="#05070f"
-              objectsData={liveSats}
+
+              /* All satellites via objectsData (flagship 3D spheres + CSV tiny spheres) */
+              objectsData={allLiveSats}
               objectLat={(d: object) => (d as GlobeSat).lat}
               objectLng={(d: object) => (d as GlobeSat).lng}
               objectAltitude={(d: object) => (d as GlobeSat).altKm / EARTH_RADIUS_KM}
               objectLabel={(d: object) => {
                 const s = d as GlobeSat;
-                return `<div style="font-size:12px;line-height:1.5"><b>${s.name}</b><br/>${s.country} · ${s.purpose}<br/>${s.orbitClass} · ${Math.round(s.altKm)} km</div>`;
+                return `<div style="font-size:12px;line-height:1.5"><b>${s.name}</b><br/>${s.country} · ${purposeZh(s.purpose)}<br/>${s.orbitClass} · ${Math.round(s.altKm)} km</div>`;
               }}
               objectThreeObject={makeObject}
               onObjectClick={(d: object) => setSelectedId((d as GlobeSat).id)}
+
+              /* Orbital ring for selected satellite */
               pathsData={selected ? [orbitPath] : []}
               pathPoints={(d: object) => d as [number, number, number][]}
               pathPointLat={(p: object) => (p as [number, number, number])[0]}
@@ -392,17 +499,14 @@ export function GlobeShell() {
             />
             {loading && (
               <div className="pointer-events-none absolute right-4 top-4 rounded-xl bg-black/60 px-3 py-1.5 text-xs text-amber-300 backdrop-blur">
-                加载 CSV 卫星…
+                加载全部卫星…
               </div>
             )}
           </div>
 
-          {/* ── right panel ── */}
           <aside className="flex flex-col gap-4 xl:overflow-y-auto xl:max-h-[72vh] xl:pr-1">
 
-            {/* Filters */}
             <Panel title="筛选器">
-              {/* Orbit class */}
               <div className="mb-3">
                 <div className="mb-1.5 text-[10px] text-slate-400">轨道类型</div>
                 <div className="flex flex-wrap gap-1.5">
@@ -412,7 +516,6 @@ export function GlobeShell() {
                 </div>
               </div>
 
-              {/* Purpose */}
               <div className="mb-3">
                 <div className="mb-1.5 text-[10px] text-slate-400">用途</div>
                 <div className="flex flex-wrap gap-1.5">
@@ -426,7 +529,6 @@ export function GlobeShell() {
                 </div>
               </div>
 
-              {/* Users */}
               <div className="mb-3">
                 <div className="mb-1.5 text-[10px] text-slate-400">运营方性质</div>
                 <div className="flex flex-wrap gap-1.5">
@@ -441,7 +543,6 @@ export function GlobeShell() {
                 </div>
               </div>
 
-              {/* Country search */}
               <div className="mb-3">
                 <div className="mb-1.5 text-[10px] text-slate-400">国家 / 地区搜索</div>
                 <input
@@ -453,7 +554,6 @@ export function GlobeShell() {
                 />
               </div>
 
-              {/* Flagship toggle */}
               <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300">
                 <input
                   type="checkbox"
@@ -465,7 +565,6 @@ export function GlobeShell() {
               </label>
             </Panel>
 
-            {/* Country breakdown from current filtered set */}
             {countryCounts.length > 0 && (
               <Panel title="国家分布（当前结果）">
                 <div className="flex flex-wrap gap-1.5">
@@ -483,8 +582,7 @@ export function GlobeShell() {
               </Panel>
             )}
 
-            {/* Selected satellite detail */}
-            <Panel title={selected ? "卫星详情" : "卫星详情"}>
+            <Panel title="卫星详情">
               {selected ? (
                 <div>
                   <div className="flex items-center gap-2">
@@ -503,10 +601,10 @@ export function GlobeShell() {
                     {(selected.perigeeKm || selected.apogeeKm) && (
                       <Row k="近地点 / 远地点" v={`${Math.round(selected.perigeeKm ?? 0)} km / ${Math.round(selected.apogeeKm ?? selected.altKm)} km`} />
                     )}
-                    <Row k="当前高度"         v={`${Math.round(selected.altKm)} km`} />
-                    <Row k="星下点"           v={`${selected.lat.toFixed(2)}°, ${selected.lng.toFixed(2)}°`} />
+                    <Row k="当前高度" v={`${Math.round(selected.altKm)} km`} />
+                    <Row k="星下点"   v={`${selected.lat.toFixed(2)}°, ${selected.lng.toFixed(2)}°`} />
                     {selected.inclinationDeg !== undefined && (
-                      <Row k="轨道倾角"       v={`${selected.inclinationDeg.toFixed(1)}°`} />
+                      <Row k="轨道倾角" v={`${selected.inclinationDeg.toFixed(1)}°`} />
                     )}
                     {(selected as FlagshipSatellite).mission && (
                       <div className="mt-2 rounded-lg bg-white/5 px-3 py-2 text-slate-300 leading-5">
@@ -527,10 +625,9 @@ export function GlobeShell() {
               )}
             </Panel>
 
-            {/* List of first 20 visible */}
             <Panel title={`卫星列表（前 20 / ${totalVisible}）`}>
               <div className="space-y-1">
-                {liveSats.slice(0, 20).map((sat) => (
+                {allLiveSats.slice(0, 20).map((sat) => (
                   <button key={sat.id} type="button"
                     onClick={() => setSelectedId(sat.id)}
                     className={`flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-left text-xs transition ${
@@ -553,7 +650,7 @@ export function GlobeShell() {
   );
 }
 
-/* ── small helper components ──────────────────────────────────────── */
+/* ── small helper components ─────────────────────────────────────── */
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
