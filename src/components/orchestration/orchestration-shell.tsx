@@ -7,16 +7,23 @@ import { CopilotKit, useCopilotAction, useCopilotReadable } from "@copilotkit/re
 import { CopilotChat } from "@copilotkit/react-ui";
 import { AppSidebar } from "@/components/app-sidebar";
 
-const AGENT_NAME = "satelliteAnalyst";
+type AgentKey = "satelliteAnalyst" | "magneticOrchestrator";
+
+const AGENT_OPTIONS: { key: AgentKey; label: string; sub: string }[] = [
+  { key: "satelliteAnalyst", label: "卫星智能体分析", sub: "CrewAI · MCP 工具" },
+  { key: "magneticOrchestrator", label: "模型编排 Magnetic-One", sub: "Planner → Graph → Executor → Verify" },
+];
 
 /* ── public export ────────────────────────────────────────────────── */
 
 export function OrchestrationShell() {
+  const [agent, setAgent] = useState<AgentKey>("satelliteAnalyst");
+
   return (
-    <CopilotKit runtimeUrl="/api/copilotkit" agent={AGENT_NAME}>
+    <CopilotKit key={agent} runtimeUrl="/api/copilotkit" agent={agent}>
       <div className="flex h-screen overflow-hidden bg-[#f4f5f7] font-sans text-slate-900">
         <AppSidebar />
-        <OrchestrationWorkspace />
+        <OrchestrationWorkspace agent={agent} onAgentChange={setAgent} />
       </div>
     </CopilotKit>
   );
@@ -29,20 +36,24 @@ type Region = { label: string; bbox: [number, number, number, number]; color: st
 
 /* ── workspace ────────────────────────────────────────────────────── */
 
-function OrchestrationWorkspace() {
+function OrchestrationWorkspace({ agent, onAgentChange }: { agent: AgentKey; onAgentChange: (a: AgentKey) => void }) {
   const [image, setImage] = useState<{ dataUrl: string; name: string } | null>(null);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [toolLog, setToolLog] = useState<ToolRecord[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const isOrchestrator = agent === "magneticOrchestrator";
 
   useEffect(() => {
     let active = true;
-    fetch("/api/agent/health")
+    setBackendOnline(null);
+    setToolLog([]);
+    const url = isOrchestrator ? "/api/agent/health?backend=orchestrator" : "/api/agent/health";
+    fetch(url)
       .then((r) => r.json())
       .then((d) => active && setBackendOnline(Boolean(d?.ok)))
       .catch(() => active && setBackendOnline(false));
     return () => { active = false; };
-  }, []);
+  }, [isOrchestrator]);
 
   useCopilotReadable({ description: "attached_satellite_image", value: image?.dataUrl ?? "" });
 
@@ -81,18 +92,33 @@ function OrchestrationWorkspace() {
               </svg>
             </div>
             <div>
-              <div className="text-sm font-semibold">卫星智能体分析</div>
+              <div className="text-sm font-semibold">{AGENT_OPTIONS.find((o) => o.key === agent)?.label}</div>
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <span className={`h-1.5 w-1.5 rounded-full ${backendOnline === true ? "bg-[#22c55e]" : backendOnline === false ? "bg-red-400" : "bg-amber-400"}`} />
-                {backendOnline === true ? "在线 · CrewAI" : backendOnline === false ? "后端离线" : "连接中…"}
+                {backendOnline === true ? `在线 · ${isOrchestrator ? "Magnetic-One" : "CrewAI"}` : backendOnline === false ? "后端离线" : "连接中…"}
               </div>
             </div>
           </div>
         </div>
 
+        <div className="border-b border-[#e2e8f0] px-5 py-3">
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">智能体模式</div>
+          <div className="flex flex-col gap-1.5">
+            {AGENT_OPTIONS.map((o) => (
+              <button key={o.key} type="button" onClick={() => onAgentChange(o.key)}
+                className={`rounded-lg border px-3 py-2 text-left text-xs transition ${agent === o.key ? "border-[#3d74ff] bg-[#eef3ff] text-[#2f62d9]" : "border-[#e2e8f0] text-slate-500 hover:border-[#cbd5e1]"}`}>
+                <div className="font-semibold">{o.label}</div>
+                <div className="text-[10px] text-slate-400">{o.sub}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
         {backendOnline === false && (
           <div className="border-b border-[#fde8d3] bg-[#fff7ed] px-4 py-2.5 text-xs text-[#c2410c]">
-            运行：<code className="rounded bg-[#ffedd5] px-1 py-0.5">cd backend && uv run uvicorn app:app --port 8000</code>
+            运行：<code className="rounded bg-[#ffedd5] px-1 py-0.5">
+              {isOrchestrator ? "cd backend && uv run uvicorn orchestrator.app:app --port 8100" : "cd backend && uv run uvicorn app:app --port 8000"}
+            </code>
           </div>
         )}
 
@@ -140,9 +166,14 @@ function OrchestrationWorkspace() {
         </div>
 
         <div className="border-t border-[#e2e8f0] px-5 py-3">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">可用 MCP 工具</div>
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            {isOrchestrator ? "可用模型工具" : "可用 MCP 工具"}
+          </div>
           <div className="space-y-1 text-xs">
-            {["segment_image", "detect_objects", "tle_lookup", "geo_locate"].map((t) => (
+            {(isOrchestrator
+              ? ["skyeyegpt", "sarmae", "dofa", "sattxt", "mtp"]
+              : ["segment_image", "detect_objects", "tle_lookup", "geo_locate"]
+            ).map((t) => (
               <div key={t} className="flex items-center gap-2 text-slate-500">
                 <span className="h-1.5 w-1.5 rounded-full bg-[#3d74ff]" />
                 <span className="font-mono">{t}</span>
@@ -156,21 +187,29 @@ function OrchestrationWorkspace() {
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center justify-between border-b border-[#e2e8f0] bg-white px-6 py-3">
           <div>
-            <h1 className="text-sm font-semibold">多智能体分析对话</h1>
-            <p className="text-xs text-slate-400">CrewAI · MCP 工具 · AG-UI</p>
+            <h1 className="text-sm font-semibold">{isOrchestrator ? "模型编排调用对话" : "多智能体分析对话"}</h1>
+            <p className="text-xs text-slate-400">{isOrchestrator ? "Magnetic-One · model_wrappers · AG-UI" : "CrewAI · MCP 工具 · AG-UI"}</p>
           </div>
           <span className="hidden rounded-full bg-[#f1f5f9] px-3 py-1 text-xs text-slate-500 xl:inline">
-            协调者 → 图像分析师 → 报告生成
+            {isOrchestrator ? "任务规划 → 执行图 → 执行 → 整合 → 验证" : "协调者 → 图像分析师 → 报告生成"}
           </span>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden bg-[#f9fafb]">
           <CopilotChat
             className="h-full"
-            labels={{
-              title: "卫星智能体",
-              initial: "你好，我是卫星情报多智能体助手（CrewAI）。可分析区域、检索卫星轨道，或附加图像做目标检测 / 分割。",
-              placeholder: "描述分析任务，或附加卫星图像后提问……",
-            }}
+            labels={
+              isOrchestrator
+                ? {
+                    title: "模型编排",
+                    initial: "你好，我是遥感模型编排助手（Magnetic-One）。描述分析需求，或附加卫星/SAR图像后提问，我会规划并调用 DOFA / SATtxt 等模型工具。",
+                    placeholder: "描述分析任务，或附加图像后提问……",
+                  }
+                : {
+                    title: "卫星智能体",
+                    initial: "你好，我是卫星情报多智能体助手（CrewAI）。可分析区域、检索卫星轨道，或附加图像做目标检测 / 分割。",
+                    placeholder: "描述分析任务，或附加卫星图像后提问……",
+                  }
+            }
           />
         </div>
       </div>

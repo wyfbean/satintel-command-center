@@ -46,6 +46,8 @@ backend/.venv/
 backend/.env
 backend/uploads/
 !backend/.env.example
+backend/model_wrappers/weights/
+backend/model_wrappers/outputs/
 
 # env files (can opt-in for committing if needed)
 .env*
