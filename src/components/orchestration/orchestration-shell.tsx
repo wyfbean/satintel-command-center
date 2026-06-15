@@ -45,8 +45,6 @@ function OrchestrationWorkspace({ agent, onAgentChange }: { agent: AgentKey; onA
 
   useEffect(() => {
     let active = true;
-    setBackendOnline(null);
-    setToolLog([]);
     const url = isOrchestrator ? "/api/agent/health?backend=orchestrator" : "/api/agent/health";
     fetch(url)
       .then((r) => r.json())

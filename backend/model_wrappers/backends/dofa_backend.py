@@ -103,6 +103,23 @@ def _preprocess(image_path: Path, device: str):
     return tfm(img).unsqueeze(0).to(device), img.size
 
 
+def _patch_tokens(model, x, wave_list):
+    """Reproduce `OFAViT.forward_features` up to the transformer blocks, returning the
+    full [B, 1+N, D] token sequence (cls token + patch tokens) instead of its pooled output."""
+    import torch  # noqa: PLC0415
+
+    wavelist = torch.tensor(wave_list, device=x.device).float()
+    model.waves = wavelist
+    x, _ = model.patch_embed(x, model.waves)
+    x = x + model.pos_embed[:, 1:, :]
+    cls_token = model.cls_token + model.pos_embed[:, :1, :]
+    cls_tokens = cls_token.expand(x.shape[0], -1, -1)
+    x = torch.cat((cls_tokens, x), dim=1)
+    for block in model.blocks:
+        x = block(x)
+    return x
+
+
 def run(image: str, task: str = "segment", dataset_head: str = "m-chesapeake", bands: list[float] | None = None) -> dict[str, Any]:
     started = time.monotonic()
     if task != "segment":
@@ -123,9 +140,10 @@ def run(image: str, task: str = "segment", dataset_head: str = "m-chesapeake", b
         wave_list = bands or _DEFAULT_RGB_WAVELENGTHS
 
         with torch.no_grad():
-            feats = model.forward_features(tensor, wave_list=wave_list)
-            # forward_features -> [B, 1+N, D] (cls token + patch tokens) for ViT-Base/16 @224 -> 196 patches
-            patch_feats = feats[:, 1:, :].squeeze(0)  # [N, D]
+            # model.forward_features pools to [B, D] (cls token or global-mean), discarding
+            # per-patch tokens needed for segmentation — replicate its body up to (but not
+            # including) that pooling step to recover the [B, 1+N, D] sequence.
+            patch_feats = _patch_tokens(model, tensor, wave_list)[:, 1:, :].squeeze(0)  # [N, D]
 
         head = _load_head(dataset_head, device)
         if head is not None:

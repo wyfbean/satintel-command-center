@@ -68,7 +68,9 @@ def _load(device: str):
             ) from exc
 
     model = timm.create_model("vit_large_patch16_224", pretrained=False, num_classes=0, global_pool="")
-    raw = torch.load(ckpt_path, map_location="cpu")
+    # The official SARMAE pretrain checkpoint pickles an argparse.Namespace (training args)
+    # alongside the state dict, which torch>=2.6's default weights_only=True load rejects.
+    raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state_dict = raw.get("model", raw) if isinstance(raw, dict) else raw
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
 
