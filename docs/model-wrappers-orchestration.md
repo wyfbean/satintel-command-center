@@ -1,17 +1,19 @@
 # `model_wrappers` + Magnetic-One orchestrator
 
-A second, independent backend service that exposes 5 remote-sensing model
-wrappers (`skyeyegpt`, `sarmae`, `dofa`, `sattxt`, `mtp`) as MCP tools and
-drives them through a **Magnetic-One-style** multi-agent loop, bridged into
-`/orchestration` as a second selectable agent.
+A second AG-UI pipeline that exposes 5 remote-sensing model wrappers
+(`skyeyegpt`, `sarmae`, `dofa`, `sattxt`, `mtp`) as MCP tools and drives them
+through a **Magnetic-One-style** multi-agent loop, bridged into `/orchestration`
+as a second selectable agent. Because both pipelines already speak AG-UI, they
+are served from the **same backend process** by default — the CrewAI crew at
+`/agent` and the orchestrator at `/orchestrator/agent` (one `uvicorn`, one port).
 
 ## Topology
 
 ```
 /orchestration (CopilotChat, agent switcher)
-   ├─ "卫星智能体分析" -> satelliteAnalyst   -> backend/app.py            (port 8000, existing CrewAI crew)
-   └─ "模型编排 Magnetic-One" -> magneticOrchestrator -> backend/orchestrator/app.py (port 8100)
-            │  AG-UI over HTTP
+   ├─ "卫星智能体分析" -> satelliteAnalyst     -> backend/app.py  POST /agent
+   └─ "模型编排 Magnetic-One" -> magneticOrchestrator -> backend/app.py  POST /orchestrator/agent
+            │  AG-UI over HTTP  (same process, port 8000 by default)
             orchestrator/agui_bridge.run_agent_stream
             │  emit(kind, payload) from a worker thread
             orchestrator/magnetic.run_magnetic
@@ -24,8 +26,13 @@ drives them through a **Magnetic-One-style** multi-agent loop, bridged into
                       from model_wrappers/mcp_server.py via MCPServerAdapter.
 ```
 
-`src/app/api/agent/health/route.ts` proxies `GET /health` for both backends;
-`?backend=orchestrator` checks port 8100.
+`backend/app.py` mounts the orchestrator's `run_agent_stream` under
+`/orchestrator/*` alongside the crew. `backend/orchestrator/app.py` stays as a
+standalone app for prod deployments that want the (heavy) model_wrappers on a
+separate GPU host — run it on its own port and set `ORCHESTRATOR_BACKEND_URL`.
+
+`src/app/api/agent/health/route.ts` proxies `GET /health` for both pipelines;
+`?backend=orchestrator` checks `/orchestrator/health` (same host by default).
 
 ## The 5-stage Magnetic-One loop (`backend/orchestrator/magnetic.py`)
 
@@ -90,23 +97,26 @@ Downloads land in `backend/model_wrappers/weights/` (git-ignored), outputs
 All three run inference on CPU or the dev machine's RTX 4060 (8 GB VRAM is
 ample for ViT-B/ViT-L encoder forward passes at 224×224).
 
-## Run both processes (dev)
+## Run (dev)
+
+One backend process serves both pipelines:
 
 ```bash
-# terminal 1 — existing CrewAI crew
+# terminal 1 — both CrewAI crew (/agent) and orchestrator (/orchestrator/agent)
 cd backend && uv run uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 
-# terminal 2 — Magnetic-One model-wrapper orchestrator
-cd backend && uv run uvicorn orchestrator.app:app --host 127.0.0.1 --port 8100 --reload
-
-# terminal 3 — Next.js
+# terminal 2 — Next.js
 npm run dev
 ```
 
 `/orchestration` has a "智能体模式" switcher in the left sidebar to pick
 between the two agents (`satelliteAnalyst` / `magneticOrchestrator`); each
 re-mounts the `CopilotKit` provider with the corresponding agent and shows an
-offline hint with the right `uvicorn` command if its backend isn't running.
+offline hint with the single `uvicorn` command if the backend isn't running.
+
+**Split deployment (optional, prod):** to run the orchestrator on a separate
+GPU host, start `uvicorn orchestrator.app:app --port 8100` there and point the
+frontend at it with `ORCHESTRATOR_BACKEND_URL=http://<gpu-host>:8100/agent`.
 
 ## Smoke testing a single backend module
 

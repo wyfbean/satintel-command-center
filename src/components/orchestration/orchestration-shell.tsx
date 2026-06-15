@@ -119,8 +119,9 @@ function OrchestrationWorkspace({ agent, onAgentChange }: { agent: AgentKey; onA
         {backendOnline === false && (
           <div className="border-b border-[#fde8d3] bg-[#fff7ed] px-4 py-2.5 text-xs text-[#c2410c]">
             运行：<code className="rounded bg-[#ffedd5] px-1 py-0.5">
-              {isOrchestrator ? "cd backend && uv run uvicorn orchestrator.app:app --port 8100" : "cd backend && uv run uvicorn app:app --port 8000"}
+              cd backend && uv run uvicorn app:app --port 8000
             </code>
+            <span className="mt-1 block text-[10px] text-[#9a3412]">单进程同时服务 CrewAI 与 Magnetic-One 两条流水线</span>
           </div>
         )}
 

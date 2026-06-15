@@ -2,8 +2,13 @@
 
 `POST /agent` accepts an AG-UI `RunAgentInput` and streams AG-UI SSE events that the
 Next.js CopilotKit `HttpAgent` (registered in src/app/api/copilotkit/route.ts as
-`magneticOrchestrator`) consumes. Mirrors `backend/app.py`; runs on a separate port
-(default 8100) so it can coexist with the existing satellite-crew backend (8000).
+`magneticOrchestrator`) consumes.
+
+By default the main `backend/app.py` now serves this same orchestrator under
+`/orchestrator/*`, so a single `uvicorn app:app --port 8000` covers both pipelines.
+This standalone app remains for deployments that want the two pipelines on separate
+hosts/ports (e.g. the heavy model_wrappers on a dedicated GPU box): run it on its own
+port and point the frontend at it via `ORCHESTRATOR_BACKEND_URL`.
 """
 
 from __future__ import annotations
