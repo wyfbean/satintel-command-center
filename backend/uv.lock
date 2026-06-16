@@ -2971,6 +2971,7 @@ dependencies = [
     { name = "crewai-tools", extra = ["mcp"] },
     { name = "fastapi" },
     { name = "mcp" },
+    { name = "openai" },
     { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -2996,6 +2997,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'models'", specifier = ">=1.26" },
     { name = "open-clip-torch", marker = "extra == 'models'", specifier = ">=2.24" },
+    { name = "openai", specifier = ">=2.38.0" },
     { name = "pillow", marker = "extra == 'models'", specifier = ">=10.0" },
     { name = "python-multipart", specifier = ">=0.0.29" },
     { name = "timm", marker = "extra == 'models'", specifier = ">=1.0" },
