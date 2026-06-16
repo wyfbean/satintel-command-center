@@ -18,14 +18,22 @@ otherwise a deterministic mock that still exercises the bundled tools.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
-from ag_ui.core import RunAgentInput
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+# Load backend/.env into os.environ BEFORE importing the agent modules — neither
+# `uv run` nor uvicorn auto-loads it, so without this OPENAI_API_KEY stays unset
+# and both pipelines silently fall back to deterministic mock mode.
+from dotenv import load_dotenv  # noqa: E402
 
-from orchestrator.agui_bridge import run_agent_stream as run_orchestrator_stream
-from satintel_agents.agui import run_agent_stream
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from ag_ui.core import RunAgentInput  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import StreamingResponse  # noqa: E402
+
+from orchestrator.agui_bridge import run_agent_stream as run_orchestrator_stream  # noqa: E402
+from satintel_agents.agui import run_agent_stream  # noqa: E402
 
 app = FastAPI(title="SatIntel Agents", version="0.1.0")
 

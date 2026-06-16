@@ -14,13 +14,19 @@ port and point the frontend at it via `ORCHESTRATOR_BACKEND_URL`.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
-from ag_ui.core import RunAgentInput
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+# Load backend/.env (one level up) when run standalone — see backend/app.py.
+from dotenv import load_dotenv  # noqa: E402
 
-from orchestrator.agui_bridge import run_agent_stream
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+from ag_ui.core import RunAgentInput  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import StreamingResponse  # noqa: E402
+
+from orchestrator.agui_bridge import run_agent_stream  # noqa: E402
 
 app = FastAPI(title="SatIntel Model-Wrapper Orchestrator", version="0.1.0")
 

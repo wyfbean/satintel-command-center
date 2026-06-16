@@ -2972,6 +2972,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "mcp" },
     { name = "openai" },
+    { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -2999,6 +3000,7 @@ requires-dist = [
     { name = "open-clip-torch", marker = "extra == 'models'", specifier = ">=2.24" },
     { name = "openai", specifier = ">=2.38.0" },
     { name = "pillow", marker = "extra == 'models'", specifier = ">=10.0" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "python-multipart", specifier = ">=0.0.29" },
     { name = "timm", marker = "extra == 'models'", specifier = ">=1.0" },
     { name = "torch", marker = "extra == 'models'", specifier = ">=2.2" },
