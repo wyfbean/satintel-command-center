@@ -161,13 +161,6 @@ function OrchestrationWorkspace() {
       {/* ── main chat ── */}
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center justify-between border-b border-[#e2e8f0] bg-white px-6 py-3">
-          <div>
-            <h1 className="text-sm font-semibold">遥感分析智能体</h1>
-            <p className="text-xs text-slate-400">Magnetic-One · model_wrappers · AG-UI</p>
-          </div>
-          <span className="hidden rounded-full bg-[#f1f5f9] px-3 py-1 text-xs text-slate-500 xl:inline">
-            单智能体 · 模型工具调用
-          </span>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden bg-[#f9fafb]">
           <CopilotChat
