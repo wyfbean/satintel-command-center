@@ -14,6 +14,11 @@ import { SatelliteDashboardAgent } from "@/lib/a2a/dashboard-agent";
  * - `satelliteAnalyst` bridges to the Python CrewAI backend over AG-UI via `HttpAgent`
  *   (POST /agent). This is the official CopilotKit↔CrewAI pattern; the crew's multi-agent
  *   collaboration and MCP/A2A tool-call results stream into the `/orchestration` chat.
+ * - `magneticOrchestrator` bridges to the Python Magnetic-One-style model-wrapper
+ *   orchestrator — Task Planner / Execution Graph / Agent Executor / Integration / Verify
+ *   Agent stages. Served from the SAME backend process as `satelliteAnalyst` by default
+ *   (`backend/app.py` exposes it under `/orchestrator/agent`); override
+ *   `ORCHESTRATOR_BACKEND_URL` to split it onto a separate host/port in prod.
  * - `satellite_dashboard` stays in-process for `/dashboard`.
  *
  * `ExperimentalEmptyAdapter` is the documented adapter when agents emit their own events,
@@ -24,6 +29,9 @@ const runtime = new CopilotRuntime({
   agents: {
     satelliteAnalyst: new HttpAgent({
       url: process.env.AGENT_BACKEND_URL ?? "http://127.0.0.1:8000/agent",
+    }),
+    magneticOrchestrator: new HttpAgent({
+      url: process.env.ORCHESTRATOR_BACKEND_URL ?? "http://127.0.0.1:8000/orchestrator/agent",
     }),
     satellite_dashboard: new SatelliteDashboardAgent(),
   },

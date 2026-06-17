@@ -15,6 +15,12 @@ uv run uvicorn app:app --host 127.0.0.1 --port 8000
 `GET /health` → `{ "status": "ok", "mode": "live" | "mock" }`
 `POST /agent` → AG-UI SSE stream (consumed by the frontend `HttpAgent`).
 
+This single process also serves the **Magnetic-One model-wrapper orchestrator** under
+`POST /orchestrator/agent` (+ `GET /orchestrator/health`), registered as the
+`magneticOrchestrator` agent — so one `uvicorn app:app` covers both `/orchestration`
+pipelines. See `docs/model-wrappers-orchestration.md`; to split it onto a separate
+host, run `uvicorn orchestrator.app:app` and set `ORCHESTRATOR_BACKEND_URL`.
+
 The Next.js app proxies `/api/agent/*` → this server (see `next.config.ts`) and registers it as
 the `satelliteAnalyst` agent in `src/app/api/copilotkit/route.ts`.
 

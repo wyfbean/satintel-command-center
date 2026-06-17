@@ -7,13 +7,11 @@ import { CopilotKit, useCopilotAction, useCopilotReadable } from "@copilotkit/re
 import { CopilotChat } from "@copilotkit/react-ui";
 import { AppSidebar } from "@/components/app-sidebar";
 
-const AGENT_NAME = "satelliteAnalyst";
-
 /* ── public export ────────────────────────────────────────────────── */
 
 export function OrchestrationShell() {
   return (
-    <CopilotKit runtimeUrl="/api/copilotkit" agent={AGENT_NAME}>
+    <CopilotKit runtimeUrl="/api/copilotkit" agent="magneticOrchestrator">
       <div className="flex h-screen overflow-hidden bg-[#f4f5f7] font-sans text-slate-900">
         <AppSidebar />
         <OrchestrationWorkspace />
@@ -37,7 +35,7 @@ function OrchestrationWorkspace() {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/agent/health")
+    fetch("/api/agent/health?backend=orchestrator")
       .then((r) => r.json())
       .then((d) => active && setBackendOnline(Boolean(d?.ok)))
       .catch(() => active && setBackendOnline(false));
@@ -50,15 +48,19 @@ function OrchestrationWorkspace() {
     name: "*",
     render: ({ name, args, status, result }: { name: string; args: unknown; status: string; result: unknown }) => {
       if (status === "inProgress") {
-        setToolLog((p) => {
+        // Defer past the current render/effect pass — CopilotKit invokes this render
+        // callback from inside its own useEffect, so a synchronous setState here
+        // triggers React's "update while rendering a different component" warning.
+        queueMicrotask(() => setToolLog((p) => {
           if (p.some((t) => t.name === name && t.status === "pending")) return p;
           return [{ id: `${Date.now()}_${name}`, name, status: "pending", result: null }, ...p.slice(0, 19)];
-        });
+        }));
       }
       if (status === "complete") {
-        setToolLog((p) =>
-          p.map((t) => (t.name === name && t.status === "pending") ? { ...t, status: "complete", result } : t),
-        );
+        queueMicrotask(() => setToolLog((p) => {
+          if (!p.some((t) => t.name === name && t.status === "pending")) return p;
+          return p.map((t) => (t.name === name && t.status === "pending") ? { ...t, status: "complete", result } : t);
+        }));
       }
       return <ToolCard name={name} args={args} status={status} result={result} image={image?.dataUrl ?? null} />;
     },
@@ -81,10 +83,10 @@ function OrchestrationWorkspace() {
               </svg>
             </div>
             <div>
-              <div className="text-sm font-semibold">卫星智能体分析</div>
+              <div className="text-sm font-semibold">遥感分析智能体</div>
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <span className={`h-1.5 w-1.5 rounded-full ${backendOnline === true ? "bg-[#22c55e]" : backendOnline === false ? "bg-red-400" : "bg-amber-400"}`} />
-                {backendOnline === true ? "在线 · CrewAI" : backendOnline === false ? "后端离线" : "连接中…"}
+                {backendOnline === true ? "在线 · Magnetic-One" : backendOnline === false ? "后端离线" : "连接中…"}
               </div>
             </div>
           </div>
@@ -92,7 +94,9 @@ function OrchestrationWorkspace() {
 
         {backendOnline === false && (
           <div className="border-b border-[#fde8d3] bg-[#fff7ed] px-4 py-2.5 text-xs text-[#c2410c]">
-            运行：<code className="rounded bg-[#ffedd5] px-1 py-0.5">cd backend && uv run uvicorn app:app --port 8000</code>
+            运行：<code className="rounded bg-[#ffedd5] px-1 py-0.5">
+              cd backend && uv run uvicorn app:app --port 8000
+            </code>
           </div>
         )}
 
@@ -140,9 +144,11 @@ function OrchestrationWorkspace() {
         </div>
 
         <div className="border-t border-[#e2e8f0] px-5 py-3">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">可用 MCP 工具</div>
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            可用模型工具
+          </div>
           <div className="space-y-1 text-xs">
-            {["segment_image", "detect_objects", "tle_lookup", "geo_locate"].map((t) => (
+            {["skyeyegpt", "sarmae", "dofa", "sattxt", "mtp"].map((t) => (
               <div key={t} className="flex items-center gap-2 text-slate-500">
                 <span className="h-1.5 w-1.5 rounded-full bg-[#3d74ff]" />
                 <span className="font-mono">{t}</span>
@@ -155,21 +161,14 @@ function OrchestrationWorkspace() {
       {/* ── main chat ── */}
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center justify-between border-b border-[#e2e8f0] bg-white px-6 py-3">
-          <div>
-            <h1 className="text-sm font-semibold">多智能体分析对话</h1>
-            <p className="text-xs text-slate-400">CrewAI · MCP 工具 · AG-UI</p>
-          </div>
-          <span className="hidden rounded-full bg-[#f1f5f9] px-3 py-1 text-xs text-slate-500 xl:inline">
-            协调者 → 图像分析师 → 报告生成
-          </span>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden bg-[#f9fafb]">
           <CopilotChat
             className="h-full"
             labels={{
-              title: "卫星智能体",
-              initial: "你好，我是卫星情报多智能体助手（CrewAI）。可分析区域、检索卫星轨道，或附加图像做目标检测 / 分割。",
-              placeholder: "描述分析任务，或附加卫星图像后提问……",
+              title: "遥感分析智能体",
+              initial: "你好，我是遥感分析智能体。描述分析需求，或附加卫星 / SAR 图像后提问，我会调用 DOFA / SATtxt / MTP 等模型工具完成分析。",
+              placeholder: "描述分析任务，或附加图像后提问……",
             }}
           />
         </div>

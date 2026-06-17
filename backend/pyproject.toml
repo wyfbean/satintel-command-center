@@ -10,6 +10,22 @@ dependencies = [
     "crewai-tools[mcp]>=1.14.6",
     "fastapi>=0.136.3",
     "mcp>=1.26.0",
+    "openai>=2.38.0",
+    "python-dotenv>=1.2.2",
     "python-multipart>=0.0.29",
     "uvicorn[standard]>=0.48.0",
+]
+
+[project.optional-dependencies]
+# model_wrappers: locally-runnable backends (DOFA encoder + RemoteCLIP/SATtxt).
+# SARMAE / MTP / SkyEyeGPT need separate version-pinned conda envs — see
+# model_wrappers/backends/*_backend.py and common.CONDA_ENV_MAP.
+models = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "timm>=1.0",
+    "open-clip-torch>=2.24",
+    "huggingface_hub>=0.25",
+    "pillow>=10.0",
+    "numpy>=1.26",
 ]
