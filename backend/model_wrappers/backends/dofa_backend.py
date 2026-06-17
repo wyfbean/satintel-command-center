@@ -26,6 +26,7 @@ is what upgrades step 2 -> true per-dataset segmentation.
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,13 @@ from ..schemas import DOFA_DATASET_HEADS
 
 MODEL_NAME = "dofa"
 _DEFAULT_RGB_WAVELENGTHS = [0.665, 0.56, 0.49]  # µm
+
+# Fine-tuned UPerLite head checkpoints live at <DOFA_HEADS_DIR>/<dataset_head>/best.pth.
+_HEADS_DIR = Path(os.environ.get("DOFA_HEADS_DIR", str(WEIGHTS_DIR / "dofa_heads")))
+
+
+def _head_ckpt_path(dataset_head: str) -> Path:
+    return _HEADS_DIR / dataset_head / "best.pth"
 
 # Cluster counts roughly matching each GEO-Bench head's class count.
 N_CLUSTERS: dict[str, int] = {
@@ -129,10 +137,35 @@ def run(image: str, task: str = "segment", dataset_head: str = "m-chesapeake", b
 
     device = pick_device()
     try:
-        model = _load_encoder(device)
         image_path = resolve_image(image)
         if not image_path.exists():
             return envelope(model=MODEL_NAME, task=task, ok=False, error=f"image not found: {image_path}")
+
+        # --- REAL fine-tuned head path (reconstructed UPerLite, strict-loaded) ---
+        head_ckpt = _head_ckpt_path(dataset_head)
+        if head_ckpt.exists():
+            from . import dofa_seg  # noqa: PLC0415
+
+            try:
+                encoder = dofa_seg.load_encoder(WEIGHTS_DIR, device)
+                head, cfg = dofa_seg.load_head(head_ckpt, device)
+                res = dofa_seg.segment(encoder, head, image_path, cfg, device)
+            except Exception as exc:  # noqa: BLE001 - any head/preproc failure → ok:false envelope, never crash
+                return envelope(model=MODEL_NAME, task=task, ok=False, error=f"DOFA real-head failed: {exc}", device=device, started_at=started)
+            res["dataset_head"] = dataset_head
+            res["head_source"] = (
+                f"real fine-tuned UPerLite head ({head_ckpt.name}, strict-loaded); "
+                "normalization approximate — place band_stats.json for exact"
+            )
+            out_path = OUTPUT_DIR / f"dofa_{dataset_head}_{int(time.time())}.json"
+            out_path.write_text(__import__("json").dumps(res), encoding="utf-8")
+            return envelope(
+                model=MODEL_NAME, task=task, result=res, device=device,
+                weights="DOFA ViT-B/16 + fine-tuned UPerLite head", started_at=started, output_path=str(out_path),
+            )
+
+        # --- FALLBACK: real encoder + unsupervised k-means (no fine-tuned head present) ---
+        model = _load_encoder(device)
 
         import torch  # noqa: PLC0415
 
