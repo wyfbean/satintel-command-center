@@ -2,7 +2,7 @@
 
 import "@copilotkit/react-ui/styles.css";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CopilotKit, useCopilotAction, useCopilotReadable } from "@copilotkit/react-core";
 import { CopilotChat } from "@copilotkit/react-ui";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -24,6 +24,15 @@ export function OrchestrationShell() {
 
 type ToolRecord = { id: string; name: string; status: "pending" | "complete"; result: unknown };
 type Region = { label: string; bbox: [number, number, number, number]; color: string; score: number };
+type ClassStat = { class_id: number; pixels?: number; ratio?: number };
+type Detection = { class?: string; confidence?: number; rbox?: number[]; bbox?: number[] };
+
+// Distinct, high-contrast palette for segmentation class ids / detection boxes.
+const SEG_PALETTE = [
+  "#ef4444", "#3b82f6", "#22c55e", "#f59e0b", "#a855f7", "#06b6d4",
+  "#ec4899", "#84cc16", "#f97316", "#14b8a6", "#6366f1", "#eab308",
+];
+const classColor = (id: number) => SEG_PALETTE[((id % SEG_PALETTE.length) + SEG_PALETTE.length) % SEG_PALETTE.length];
 
 /* ── workspace ────────────────────────────────────────────────────── */
 
@@ -134,7 +143,7 @@ function OrchestrationWorkspace() {
                   </div>
                   {Boolean(t.result) && (
                     <div className="mt-1 truncate text-slate-400">
-                      {(typeof t.result === "string" ? t.result : JSON.stringify(t.result)).slice(0, 72)}
+                      {summarizeResult(t.result)}
                     </div>
                   )}
                 </div>
@@ -184,8 +193,25 @@ function ToolCard({ name, args, status, result, image }: {
 }) {
   const parsed = parseMaybeJson(result);
   const argObj = parseMaybeJson(args);
-  const regions = (parsed as { regions?: Region[] } | null)?.regions;
-  const objects = (parsed as { objects?: Record<string, unknown>[] } | null)?.objects;
+
+  // The backend wraps every tool result in an envelope {ok, model, task, meta, result}.
+  // Unwrap to the inner payload so mask/detections/regions live at the top level here;
+  // fall back to `parsed` for any bare (non-enveloped) shape.
+  const env = parsed as { ok?: unknown; model?: unknown; result?: unknown } | null;
+  const data = (env && typeof env === "object" && typeof env.ok === "boolean" && "model" in env && env.ok
+    && env.result && typeof env.result === "object")
+    ? (env.result as Record<string, unknown>)
+    : (parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null);
+
+  const regions = data?.regions as Region[] | undefined;
+  const objects = data?.objects as Record<string, unknown>[] | undefined;
+  const rawMask = data?.mask;
+  const mask = Array.isArray(rawMask) && Array.isArray(rawMask[0]) ? (rawMask as number[][]) : null;
+  const rawDet = data?.detections;
+  const detections = Array.isArray(rawDet) ? (rawDet as Detection[]) : null;
+  const imageSize = (data?.image_size as number[] | undefined) ?? null;
+  const classDist = (data?.class_distribution as ClassStat[] | undefined) ?? null;
+  const headSource = (data?.head_source as string | undefined) ?? null;
 
   return (
     <div className="my-2 overflow-hidden rounded-xl border border-[#dbe4ff] bg-white shadow-sm">
@@ -199,6 +225,8 @@ function ToolCard({ name, args, status, result, image }: {
         </span>
       </div>
       <div className="p-3">
+        {mask && <MaskOverlay image={image} mask={mask} classDist={classDist} headSource={headSource} />}
+        {detections && <DetectionOverlay image={image} detections={detections} imageSize={imageSize} headSource={headSource} />}
         {regions && image && <SegmentationOverlay image={image} regions={regions} />}
         {objects && (
           <div className="space-y-1">
@@ -210,7 +238,7 @@ function ToolCard({ name, args, status, result, image }: {
             ))}
           </div>
         )}
-        {!regions && !objects && Boolean(parsed) && (
+        {!mask && !detections && !regions && !objects && Boolean(parsed) && (
           <pre className="max-h-36 overflow-auto rounded-lg bg-[#0f172a] p-2.5 text-[11px] leading-5 text-[#dbeafe]">
             <code>{JSON.stringify(parsed, null, 2)}</code>
           </pre>
@@ -242,6 +270,140 @@ function SegmentationOverlay({ image, regions }: { image: string; regions: Regio
       </svg>
     </div>
   );
+}
+
+/* ── dense segmentation mask overlay (DOFA / SARMAE seg) ──────────── */
+
+function MaskOverlay({ image, mask, classDist, headSource }: {
+  image: string | null; mask: number[][]; classDist: ClassStat[] | null; headSource: string | null;
+}) {
+  // Render the class-id grid to a tiny canvas (1px/cell), upscaled by CSS — far
+  // cheaper than thousands of SVG <rect>s. The square mask is stretched (fill) back
+  // over the displayed image, which cancels the square-resize the backend applied.
+  const maskUrl = useMemo(() => {
+    const rows = mask.length, cols = mask[0]?.length ?? 0;
+    if (!rows || !cols) return "";
+    const canvas = document.createElement("canvas");
+    canvas.width = cols; canvas.height = rows;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return "";
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        ctx.fillStyle = classColor(mask[r][c] | 0);
+        ctx.fillRect(c, r, 1, 1);
+      }
+    }
+    return canvas.toDataURL();
+  }, [mask]);
+
+  // Legend: prefer the backend's class_distribution; else derive uniques from the mask.
+  const legend = useMemo<ClassStat[]>(() => {
+    if (classDist && classDist.length) return [...classDist].sort((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0));
+    const counts = new Map<number, number>();
+    let total = 0;
+    for (const row of mask) for (const v of row) { counts.set(v, (counts.get(v) ?? 0) + 1); total++; }
+    return [...counts.entries()]
+      .map(([class_id, pixels]) => ({ class_id, pixels, ratio: total ? pixels / total : 0 }))
+      .sort((a, b) => b.ratio - a.ratio);
+  }, [classDist, mask]);
+
+  return (
+    <div className="mb-2">
+      <div className="relative overflow-hidden rounded-lg bg-[#0f172a]">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {image && <img src={image} alt="分析图像" className="block w-full" />}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={maskUrl}
+          alt="分割掩码"
+          className={image ? "absolute inset-0 h-full w-full" : "block w-full"}
+          style={{ imageRendering: "pixelated", opacity: image ? 0.5 : 1 }}
+        />
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+        {legend.map((s) => (
+          <span key={s.class_id} className="flex items-center gap-1 text-[11px] text-slate-500">
+            <span className="h-2.5 w-2.5 rounded-sm" style={{ background: classColor(s.class_id) }} />
+            类 {s.class_id}
+            {typeof s.ratio === "number" && <span className="text-slate-400">{(s.ratio * 100).toFixed(1)}%</span>}
+          </span>
+        ))}
+      </div>
+      {headSource && <div className="mt-1.5 text-[10px] text-slate-400">分割头：{headSource}</div>}
+    </div>
+  );
+}
+
+/* ── detection overlay: rotated (rbox) + axis-aligned (bbox) boxes ──── */
+
+function DetectionOverlay({ image, detections, imageSize, headSource }: {
+  image: string | null; detections: Detection[]; imageSize: number[] | null; headSource: string | null;
+}) {
+  const [iw, ih] = imageSize && imageSize.length >= 2 ? imageSize : [0, 0];
+  const rect = (x1: number, y1: number, x2: number, y2: number) => `${x1},${y1} ${x2},${y1} ${x2},${y2} ${x1},${y2}`;
+  const polyFor = (d: Detection): string | null => {
+    if (Array.isArray(d.rbox) && d.rbox.length === 5 && iw && ih) {
+      const [cx, cy, w, h, a] = d.rbox; // rotated [cx,cy,w,h,angle] in pixels; angle assumed radians (mmrotate)
+      const cos = Math.cos(a), sin = Math.sin(a);
+      return [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]]
+        .map(([ox, oy]) => `${((cx + cos * ox - sin * oy) / iw * 100).toFixed(2)},${((cy + sin * ox + cos * oy) / ih * 100).toFixed(2)}`)
+        .join(" ");
+    }
+    if (Array.isArray(d.bbox) && d.bbox.length >= 4) {
+      const [x1, y1, x2, y2] = d.bbox; // k-means proxy bbox is already in 0–100 viewBox coords
+      return rect(x1, y1, x2, y2);
+    }
+    if (Array.isArray(d.rbox) && d.rbox.length === 4 && iw && ih) {
+      const [x1, y1, x2, y2] = d.rbox.map((v, k) => (v / (k % 2 === 0 ? iw : ih)) * 100); // axis-aligned pixels → normalize
+      return rect(x1, y1, x2, y2);
+    }
+    return null;
+  };
+
+  return (
+    <div className="mb-2">
+      <div className="relative overflow-hidden rounded-lg bg-[#0f172a]">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {image && <img src={image} alt="分析图像" className="block w-full" />}
+        <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+          {detections.map((d, i) => {
+            const pts = polyFor(d);
+            if (!pts) return null;
+            const color = classColor(i);
+            return <polygon key={i} points={pts} fill={color} fillOpacity={0.15} stroke={color} strokeWidth={0.6} />;
+          })}
+        </svg>
+      </div>
+      <div className="mt-2 space-y-1">
+        {detections.slice(0, 12).map((d, i) => (
+          <div key={i} className="flex items-center justify-between rounded-lg bg-[#f8fafc] px-3 py-1.5 text-xs">
+            <span className="flex items-center gap-1.5 font-medium text-slate-700">
+              <span className="h-2.5 w-2.5 rounded-sm" style={{ background: classColor(i) }} />
+              {String(d.class ?? "目标")}
+            </span>
+            <span className="text-slate-400">置信度 {d.confidence != null ? Number(d.confidence).toFixed(2) : "—"}</span>
+          </div>
+        ))}
+        {detections.length > 12 && <div className="text-[11px] text-slate-400">…共 {detections.length} 个目标</div>}
+        {detections.length === 0 && <div className="rounded-lg bg-[#f8fafc] px-3 py-2 text-center text-xs text-slate-400">未检出目标</div>}
+      </div>
+      {headSource && <div className="mt-1.5 text-[10px] text-slate-400">检测头：{headSource}</div>}
+    </div>
+  );
+}
+
+/* ── compact one-liner for the left-panel tool log (never stringifies dense masks) ── */
+
+function summarizeResult(result: unknown): string {
+  const parsed = parseMaybeJson(result);
+  if (parsed && typeof parsed === "object") {
+    const env = parsed as Record<string, unknown>;
+    const o = (env.result && typeof env.result === "object" ? env.result : env) as Record<string, unknown>;
+    if (Array.isArray(o.mask)) return `分割掩码 ${o.mask.length}×${(o.mask[0] as unknown[])?.length ?? 0}，${o.num_classes ?? "?"} 类`;
+    if (Array.isArray(o.detections)) return `检测到 ${o.detections.length} 个目标`;
+    if (env.ok === false && typeof env.error === "string") return `失败：${env.error}`;
+  }
+  return (typeof result === "string" ? result : JSON.stringify(result)).slice(0, 72);
 }
 
 function parseMaybeJson(v: unknown): unknown {
