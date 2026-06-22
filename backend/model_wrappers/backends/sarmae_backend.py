@@ -25,6 +25,7 @@ MMRotate/MMSeg versions conflict with this service's stack).
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,11 @@ from ..schemas import SARMAE_TASKS
 MODEL_NAME = "sarmae"
 _HF_REPO = "Wenquandan777/SARMAE"
 _HF_FILE = "SARMAE_vitl_checkpoint-last"
+
+# Fine-tuned head checkpoints (detect_epoch_34.pth / seg_iter_20000.pth) live here.
+_HEADS_DIR = Path(os.environ.get("SARMAE_HEADS_DIR", str(WEIGHTS_DIR / "sarmae_heads")))
+_SEG_CKPT = _HEADS_DIR / "seg_iter_20000.pth"
+_DETECT_CKPT = _HEADS_DIR / "detect_epoch_34.pth"
 
 _model_cache: dict[str, Any] = {}
 
@@ -113,6 +119,43 @@ def _kmeans_labels(feats, k: int):
     return labels
 
 
+def _real_detect(image_path: Path, device: str) -> dict[str, Any]:
+    """Real SAR rotated detection via mmrotate (deployment GPU box only)."""
+    import sys  # noqa: PLC0415
+
+    try:
+        from mmdet.apis import inference_detector, init_detector  # noqa: PLC0415
+        import mmrotate  # noqa: F401,PLC0415  (registers rotated modules)
+    except ImportError as exc:
+        raise ModelNotAvailableError(
+            MODEL_NAME,
+            "real SAR rotated detection needs the mmrotate/mmdet/mmcv stack (not installed here)",
+            download_hint="run on the GPU box with the mmrotate env + set SARMAE_DETECT_CONFIG / SARMAE_DETECT_REPO",
+        ) from exc
+
+    config = os.environ.get("SARMAE_DETECT_CONFIG", "")
+    repo = os.environ.get("SARMAE_DETECT_REPO", "")
+    if repo and repo not in sys.path:
+        sys.path.insert(0, repo)  # registers the custom SARMAE ViT backbone
+    if not config or not Path(config).exists():
+        raise ModelNotAvailableError(MODEL_NAME, "SARMAE_DETECT_CONFIG not set or not found",
+                                     download_hint="point SARMAE_DETECT_CONFIG at the SSDD detect config (vitb_ssdd.py)")
+    model = init_detector(config, str(_DETECT_CKPT), device=device)
+    res = inference_detector(model, str(image_path))
+    inst = res.pred_instances
+    bboxes = inst.bboxes.cpu().numpy().tolist()
+    scores = inst.scores.cpu().numpy().tolist()
+    labels = inst.labels.cpu().numpy().tolist()
+    names = getattr(getattr(model, "dataset_meta", None), "get", lambda *_: None)("classes") or ["ship"]
+    dets = [
+        {"class": names[lab] if lab < len(names) else str(lab), "rbox": box, "confidence": round(float(s), 3)}
+        for box, s, lab in zip(bboxes, scores, labels) if s >= 0.3
+    ]
+    from PIL import Image  # noqa: PLC0415
+
+    return {"image_size": list(Image.open(image_path).size), "detections": dets, "count": len(dets)}
+
+
 def run(image: str, task: str = "detect") -> dict[str, Any]:
     started = time.monotonic()
     device = pick_device()
@@ -120,10 +163,38 @@ def run(image: str, task: str = "detect") -> dict[str, Any]:
         return envelope(model=MODEL_NAME, task=task, ok=False, error=f"unsupported task '{task}', expected one of {SARMAE_TASKS}")
 
     try:
-        model = _load(device)
         image_path = resolve_image(image)
         if not image_path.exists():
             return envelope(model=MODEL_NAME, task=task, ok=False, error=f"image not found: {image_path}")
+
+        # --- REAL segmentation (reconstructed UPerHead, strict-loaded) ---
+        if task == "segment" and _SEG_CKPT.exists():
+            from . import sarmae_seg  # noqa: PLC0415
+
+            try:
+                res = sarmae_seg.segment(_SEG_CKPT, image_path, device)
+            except Exception as exc:  # noqa: BLE001 - never crash; degrade to ok:false
+                return envelope(model=MODEL_NAME, task=task, ok=False, error=f"SARMAE real-seg failed: {exc}", device=device, started_at=started)
+            res["head_source"] = f"real fine-tuned UPerHead ({_SEG_CKPT.name}, strict-loaded; AIR-PolarSAR-Seg 6 类)"
+            out_path = OUTPUT_DIR / f"sarmae_segment_{int(time.time())}.json"
+            out_path.write_text(__import__("json").dumps(res), encoding="utf-8")
+            return envelope(model=MODEL_NAME, task=task, result=res, device=device,
+                            weights="SARMAE ViT-B/16 + fine-tuned UPerHead", started_at=started, output_path=str(out_path))
+
+        # --- REAL detection (mmrotate; deployment box). Degrades to k-means on dev ---
+        if task == "detect" and _DETECT_CKPT.exists():
+            try:
+                res = _real_detect(image_path, device)
+                res["head_source"] = f"real fine-tuned rotated detector ({_DETECT_CKPT.name}, mmrotate)"
+                out_path = OUTPUT_DIR / f"sarmae_detect_{int(time.time())}.json"
+                out_path.write_text(__import__("json").dumps(res), encoding="utf-8")
+                return envelope(model=MODEL_NAME, task=task, result=res, device=device,
+                                weights="SARMAE ViT + fine-tuned rotated detector", started_at=started, output_path=str(out_path))
+            except ModelNotAvailableError:
+                pass  # mmrotate absent → fall through to the k-means proxy below
+
+        # --- FALLBACK: real encoder + unsupervised k-means proxy ---
+        model = _load(device)
 
         import torch  # noqa: PLC0415
 
