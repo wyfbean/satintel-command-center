@@ -20,6 +20,11 @@ const nextConfig: NextConfig = {
   // Produces a self-contained .next/standalone folder for lean Docker images.
   output: "standalone",
 
+  // Allow dev-server HMR/asset requests from non-localhost hosts (e.g. the
+  // WSL2 / Docker bridge interface 172.18.0.1, or a LAN IP). Next 16 blocks
+  // cross-origin access to /_next/* dev resources by default.
+  allowedDevOrigins: ["172.18.0.1"],
+
   // Transpile the globe stack's untranspiled ESM for consistent bundling. (Note:
   // the production-build hang we hit was caused by satellite.js v7's WASM build
   // importing `node:worker_threads`; we pin satellite.js v5, the pure-JS SGP4

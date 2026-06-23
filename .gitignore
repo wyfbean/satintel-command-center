@@ -59,3 +59,5 @@ backend/model_wrappers/outputs/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+CLAUDE.md

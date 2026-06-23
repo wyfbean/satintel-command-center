@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 /**
- * Global CORS middleware.
+ * Global CORS proxy (Next 16's renamed `middleware` convention).
  *
  * • Returns a 204 immediately for every OPTIONS preflight so browsers don't
  *   block cross-origin requests to /api/* routes.
@@ -9,7 +9,7 @@ import { NextResponse, type NextRequest } from "next/server";
  *   attached by `headers()` in next.config.ts; this file only needs to short-
  *   circuit the preflight before the route handler runs.
  */
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   if (request.method === "OPTIONS") {
     const origin = request.headers.get("origin") ?? "*";
     return new NextResponse(null, {
@@ -28,6 +28,6 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Only run this middleware on API routes — skip pages, assets, and _next.
+  // Only run on API routes — skip pages, assets, and _next.
   matcher: "/api/:path*",
 };
