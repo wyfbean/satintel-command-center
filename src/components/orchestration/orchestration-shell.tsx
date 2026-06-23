@@ -53,6 +53,9 @@ function OrchestrationWorkspace() {
   const [toolLog, setToolLog] = useState<ToolRecord[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const { visibleMessages, appendMessage, isLoading } = useCopilotChat();
+  // `visibleMessages` is undefined on the first render (before the agent connects),
+  // despite its non-nullable type — guard it so we don't read `.length` of undefined.
+  const conversationEmpty = (visibleMessages?.length ?? 0) === 0;
 
   useEffect(() => {
     let active = true;
@@ -181,11 +184,11 @@ function OrchestrationWorkspace() {
 
       {/* ── main chat ── */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {visibleMessages.length === 0 && (
+        {conversationEmpty && (
           <div className="border-b border-[#e2e8f0] bg-white px-6 py-3">
             <SuggestedQuestions
-              disabled={isLoading}
-              onPick={(q) => { void appendMessage(new TextMessage({ content: q, role: Role.User })); }}
+              disabled={Boolean(isLoading)}
+              onPick={(q) => { void appendMessage?.(new TextMessage({ content: q, role: Role.User })); }}
             />
           </div>
         )}
