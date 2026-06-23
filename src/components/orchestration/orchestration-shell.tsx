@@ -3,8 +3,9 @@
 import "@copilotkit/react-ui/styles.css";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CopilotKit, useCopilotAction, useCopilotReadable } from "@copilotkit/react-core";
+import { CopilotKit, useCopilotAction, useCopilotChat, useCopilotReadable } from "@copilotkit/react-core";
 import { CopilotChat } from "@copilotkit/react-ui";
+import { Role, TextMessage } from "@copilotkit/runtime-client-gql";
 import { AppSidebar } from "@/components/app-sidebar";
 
 /* ── public export ────────────────────────────────────────────────── */
@@ -34,6 +35,16 @@ const SEG_PALETTE = [
 ];
 const classColor = (id: number) => SEG_PALETTE[((id % SEG_PALETTE.length) + SEG_PALETTE.length) % SEG_PALETTE.length];
 
+// Fixed starter prompts shown before the conversation begins — they steer users
+// toward the agent's actual capabilities (the bundled model tools) instead of
+// open-ended off-scope questions. Clicking one sends it straight to the agent.
+const STARTER_QUESTIONS = [
+  "你支持哪些遥感影像分析能力？请介绍可用的模型工具",
+  "请对我附加的卫星图像进行场景描述与目标问答",
+  "检测这张 SAR 图像中的目标，并标注旋转检测框",
+  "对这张遥感图像进行地物语义分割（DOFA / SARMAE）",
+];
+
 /* ── workspace ────────────────────────────────────────────────────── */
 
 function OrchestrationWorkspace() {
@@ -41,6 +52,7 @@ function OrchestrationWorkspace() {
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [toolLog, setToolLog] = useState<ToolRecord[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const { visibleMessages, appendMessage, isLoading } = useCopilotChat();
 
   useEffect(() => {
     let active = true;
@@ -169,8 +181,14 @@ function OrchestrationWorkspace() {
 
       {/* ── main chat ── */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-[#e2e8f0] bg-white px-6 py-3">
-        </div>
+        {visibleMessages.length === 0 && (
+          <div className="border-b border-[#e2e8f0] bg-white px-6 py-3">
+            <SuggestedQuestions
+              disabled={isLoading}
+              onPick={(q) => { void appendMessage(new TextMessage({ content: q, role: Role.User })); }}
+            />
+          </div>
+        )}
         <div className="min-h-0 flex-1 overflow-hidden bg-[#f9fafb]">
           <CopilotChat
             className="h-full"
@@ -181,6 +199,29 @@ function OrchestrationWorkspace() {
             }}
           />
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── starter / guide questions (shown before the conversation begins) ── */
+
+function SuggestedQuestions({ disabled, onPick }: { disabled: boolean; onPick: (q: string) => void }) {
+  return (
+    <div>
+      <div className="mb-2 text-[11px] font-medium text-slate-400">引导问题 · 点击直接提问</div>
+      <div className="flex flex-wrap gap-2">
+        {STARTER_QUESTIONS.map((q) => (
+          <button
+            key={q}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(q)}
+            className="rounded-full border border-[#dbe4ff] bg-[#f5f8ff] px-3 py-1.5 text-xs text-[#2f62d9] transition hover:border-[#3d74ff] hover:bg-[#eaf1ff] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {q}
+          </button>
+        ))}
       </div>
     </div>
   );
