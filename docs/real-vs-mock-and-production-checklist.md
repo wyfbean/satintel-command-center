@@ -28,10 +28,10 @@
 | | `tle_lookup` / `geo_locate` | 🔴 | 接 CelesTrak / 真实地理编码 |
 | | 知识图谱 MCP (`kg/`) | ⚙️ | 构建 Kùzu 图库 + 装 `kuzu`/`fastmcp`（见 §5） |
 | **Magnetic-One 编排** `/orchestration·模型编排` | 5 阶段编排循环 | ⚙️ | 设 `OPENAI_API_KEY`（否则确定性模拟脚本） |
-| | `dofa`（多光谱分割） | 🟡 | 编码器真实(torch.hub)，但分割=无监督 k-means；需接微调分割头 |
+| | `dofa`（多光谱分割） | ✅ | 已接真实微调分割头（3 个 RGB head 直接可用）；详见 `model-machine-handoff.md` |
 | | `sattxt`（零样本分类/检索） | ✅ | 下载 RemoteCLIP 权重即真实可用 |
-| | `sarmae`（SAR 检测/分割） | 🟡 | 编码器真实(预训练)，但任务=k-means；需接微调检测/分割头 |
-| | `mtp`（RGB 目标检测） | 🔴 | 提供权重 + `mtp` conda 环境（mmdet 栈） |
+| | `sarmae`（SAR 检测/分割） | ✅/⚙️ | 分割已真实可用；检测头已就位，待 mmrotate 环境；详见 `model-machine-handoff.md` |
+| | `mtp`（RGB 目标检测） | ⚙️ | 推理代码已实现，待 `mtp` conda 环境 + config/ckpt 对 |
 | | `skyeyegpt`（遥感 VLM） | 🔴 | 提供权重 + 实现 MiniGPT-v2 推理路径 |
 
 ---
@@ -107,6 +107,8 @@ python kg/ingest.py                 # 读 satellite-KG.csv → 生成 Kùzu 图�
 **框架真实性：** 同上，`OPENAI_API_KEY` 控制真实 CrewAI 分阶段编排 vs 确定性模拟脚本。无论真假模式，**附带图像时 Agent Executor 都会调用真实的 `model_wrappers` 后端**。
 
 ### 6.1 五个模型包装器现状（`backend/model_wrappers/backends/`）
+
+> ⚠️ **本节关于 dofa/sarmae 仍为 k-means 的描述已过时** —— 现已接入真实微调头（DOFA 6 个 GEO-Bench head、SARMAE 分割/旋转检测头）。模型权重位置、模型机部署配置、各模型任务与冒烟验证请以 **`docs/model-machine-handoff.md`** 为准。下表保留作历史参考。
 
 | 模型 | 现状 | 说明 |
 |---|---|---|
