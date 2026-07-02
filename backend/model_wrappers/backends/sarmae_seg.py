@@ -165,7 +165,12 @@ def _safe_torch_load(path: Path):
     if os.name == "nt":
         pathlib.PosixPath = pathlib.PurePosixPath  # type: ignore[misc]
     try:
-        return torch.load(path, map_location="cpu", weights_only=False)
+        try:
+            return torch.load(path, map_location="cpu", weights_only=False)
+        except TypeError as exc:
+            if "weights_only" not in str(exc):
+                raise
+            return torch.load(path, map_location="cpu")
     finally:
         pathlib.PosixPath = orig_posix  # type: ignore[misc]
         try:
@@ -179,7 +184,7 @@ def _safe_torch_load(path: Path):
 
 def load_seg_model(ckpt: Path, device: str):
     """Build backbone + UPerHead and load the seg checkpoint. Head loads strict=True."""
-    key = str(ckpt)
+    key = f"{ckpt}:{device}"
     if key in _cache:
         return _cache[key]
     state = _safe_torch_load(ckpt)

@@ -28,7 +28,8 @@ def skyeyegpt(image: str, task: str, prompt: str | None = None, history: list[di
 
 def sarmae(image: str, task: str = "detect") -> dict[str, Any]:
     payload = {"image": image, "task": task}
-    return run_in_env("sarmae", "model_wrappers.backends.sarmae_backend", payload, lambda: sarmae_backend.run(**payload))
+    env_key = "sarmae-seg" if task == "segment" else "sarmae"
+    return run_in_env(env_key, "model_wrappers.backends.sarmae_backend", payload, lambda: sarmae_backend.run(**payload))
 
 
 def dofa(image: str, task: str = "segment", dataset_head: str = "m-chesapeake", bands: list[float] | None = None) -> dict[str, Any]:

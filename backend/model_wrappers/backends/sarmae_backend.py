@@ -27,20 +27,24 @@ from __future__ import annotations
 
 import os
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
-from huggingface_hub import hf_hub_download
-
-from ..common import ModelNotAvailableError, OUTPUT_DIR, WEIGHTS_DIR, envelope, pick_device, resolve_image
+from ..common import MODEL_WEIGHT_ROOT, ModelNotAvailableError, OUTPUT_DIR, WEIGHTS_DIR, envelope, pick_device, resolve_image
 from ..schemas import SARMAE_TASKS
 
 MODEL_NAME = "sarmae"
 _HF_REPO = "Wenquandan777/SARMAE"
 _HF_FILE = "SARMAE_vitl_checkpoint-last"
 
+def _default_heads_dir() -> Path:
+    copied_heads = MODEL_WEIGHT_ROOT / "sarmae_seg_detect_weights"
+    return copied_heads if copied_heads.exists() else WEIGHTS_DIR / "sarmae_heads"
+
+
 # Fine-tuned head checkpoints (detect_epoch_34.pth / seg_iter_20000.pth) live here.
-_HEADS_DIR = Path(os.environ.get("SARMAE_HEADS_DIR", str(WEIGHTS_DIR / "sarmae_heads")))
+_HEADS_DIR = Path(os.environ.get("SARMAE_HEADS_DIR", str(_default_heads_dir())))
 _SEG_CKPT = _HEADS_DIR / "seg_iter_20000.pth"
 _DETECT_CKPT = _HEADS_DIR / "detect_epoch_34.pth"
 
@@ -59,9 +63,15 @@ def _load(device: str):
             download_hint="pip install timm torch huggingface_hub",
         ) from exc
 
-    ckpt_path = WEIGHTS_DIR / "sarmae" / _HF_FILE
+    ckpt_candidates = [
+        WEIGHTS_DIR / "sarmae" / _HF_FILE,
+        MODEL_WEIGHT_ROOT / _HF_FILE,
+    ]
+    ckpt_path = next((p for p in ckpt_candidates if p.exists()), ckpt_candidates[0])
     if not ckpt_path.exists():
         try:
+            from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
             ckpt_path.parent.mkdir(parents=True, exist_ok=True)
             downloaded = hf_hub_download(repo_id=_HF_REPO, filename=_HF_FILE, local_dir=str(ckpt_path.parent))
             ckpt_path = Path(downloaded)
@@ -76,7 +86,12 @@ def _load(device: str):
     model = timm.create_model("vit_large_patch16_224", pretrained=False, num_classes=0, global_pool="")
     # The official SARMAE pretrain checkpoint pickles an argparse.Namespace (training args)
     # alongside the state dict, which torch>=2.6's default weights_only=True load rejects.
-    raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    try:
+        raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    except TypeError as exc:
+        if "weights_only" not in str(exc):
+            raise
+        raw = torch.load(ckpt_path, map_location="cpu")
     state_dict = raw.get("model", raw) if isinstance(raw, dict) else raw
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
 
@@ -121,9 +136,16 @@ def _kmeans_labels(feats, k: int):
 
 def _real_detect(image_path: Path, device: str) -> dict[str, Any]:
     """Real SAR rotated detection via mmrotate (deployment GPU box only)."""
+    import importlib.util  # noqa: PLC0415
     import sys  # noqa: PLC0415
 
+    config = os.environ.get("SARMAE_DETECT_CONFIG", "")
+    repo = os.environ.get("SARMAE_DETECT_REPO", "")
+    if repo and repo not in sys.path:
+        sys.path.insert(0, repo)
+
     try:
+        from mmcv import Config  # noqa: PLC0415
         from mmdet.apis import inference_detector, init_detector  # noqa: PLC0415
         import mmrotate  # noqa: F401,PLC0415  (registers rotated modules)
     except ImportError as exc:
@@ -133,28 +155,59 @@ def _real_detect(image_path: Path, device: str) -> dict[str, Any]:
             download_hint="run on the GPU box with the mmrotate env + set SARMAE_DETECT_CONFIG / SARMAE_DETECT_REPO",
         ) from exc
 
-    config = os.environ.get("SARMAE_DETECT_CONFIG", "")
-    repo = os.environ.get("SARMAE_DETECT_REPO", "")
-    if repo and repo not in sys.path:
-        sys.path.insert(0, repo)  # registers the custom SARMAE ViT backbone
     if not config or not Path(config).exists():
         raise ModelNotAvailableError(MODEL_NAME, "SARMAE_DETECT_CONFIG not set or not found",
                                      download_hint="point SARMAE_DETECT_CONFIG at the SSDD detect config (vitb_ssdd.py)")
-    model = init_detector(config, str(_DETECT_CKPT), device=device)
+
+    # The local SARMAE_Fintune/Detection copy only contains custom extension
+    # files, not a complete installable mmrotate fork. Register the custom ViT
+    # backbone explicitly before mmdet builds the model from config.
+    vit_timm = Path(repo) / "mmrotate" / "models" / "backbones" / "vit_timm.py" if repo else Path()
+    if vit_timm.exists() and "sarmae_detection_vit_timm" not in sys.modules:
+        spec = importlib.util.spec_from_file_location("sarmae_detection_vit_timm", vit_timm)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(module)
+            except KeyError as exc:
+                if "VisionTransformer_timm is already registered" not in str(exc):
+                    raise
+            sys.modules["sarmae_detection_vit_timm"] = module
+
+    cfg = Config.fromfile(config)
+    if "model" in cfg and "backbone" in cfg.model:
+        # The checked-in config points at a training-time relative MAE file that
+        # is not present in this deployment. The actual fine-tuned detector is
+        # loaded from detect_epoch_34.pth below.
+        cfg.model.backbone.pretrained = None
+
+    model = init_detector(cfg, str(_DETECT_CKPT), device=device)
     res = inference_detector(model, str(image_path))
-    inst = res.pred_instances
-    bboxes = inst.bboxes.cpu().numpy().tolist()
-    scores = inst.scores.cpu().numpy().tolist()
-    labels = inst.labels.cpu().numpy().tolist()
-    names = getattr(getattr(model, "dataset_meta", None), "get", lambda *_: None)("classes") or ["ship"]
-    dets = [
-        {"class": names[lab] if lab < len(names) else str(lab), "rbox": box, "confidence": round(float(s), 3)}
-        for box, s, lab in zip(bboxes, scores, labels) if s >= 0.3
-    ]
+    names = getattr(getattr(model, "dataset_meta", None), "get", lambda *_: None)("classes") or getattr(model, "CLASSES", None) or ["ship"]
+    dets = []
+    if hasattr(res, "pred_instances"):
+        inst = res.pred_instances
+        bboxes = inst.bboxes.cpu().numpy().tolist()
+        scores = inst.scores.cpu().numpy().tolist()
+        labels = inst.labels.cpu().numpy().tolist()
+        dets = [
+            {"class": names[lab] if lab < len(names) else str(lab), "bbox": box, "confidence": round(float(s), 3)}
+            for box, s, lab in zip(bboxes, scores, labels) if s >= 0.3
+        ]
+    elif isinstance(res, (list, tuple)):
+        bbox_result = res[0] if res and isinstance(res[0], list) else res
+        for cls_idx, cls_boxes in enumerate(bbox_result):
+            for row in cls_boxes:
+                vals = row.tolist() if hasattr(row, "tolist") else list(row)
+                if len(vals) >= 5 and float(vals[-1]) >= 0.3:
+                    dets.append({
+                        "class": names[cls_idx] if cls_idx < len(names) else str(cls_idx),
+                        "bbox": vals[:-1],
+                        "confidence": round(float(vals[-1]), 3),
+                    })
     from PIL import Image  # noqa: PLC0415
 
     return {"image_size": list(Image.open(image_path).size), "detections": dets, "count": len(dets)}
-
 
 def run(image: str, task: str = "detect") -> dict[str, Any]:
     started = time.monotonic()
@@ -174,7 +227,22 @@ def run(image: str, task: str = "detect") -> dict[str, Any]:
             try:
                 res = sarmae_seg.segment(_SEG_CKPT, image_path, device)
             except Exception as exc:  # noqa: BLE001 - never crash; degrade to ok:false
-                return envelope(model=MODEL_NAME, task=task, ok=False, error=f"SARMAE real-seg failed: {exc}", device=device, started_at=started)
+                msg = str(exc)
+                if device == "cuda" and ("CUDA" in msg or "cuDNN" in msg or "CUDNN" in msg):
+                    try:
+                        res = sarmae_seg.segment(_SEG_CKPT, image_path, "cpu")
+                        res["head_source"] = (
+                            f"real fine-tuned UPerHead ({_SEG_CKPT.name}, strict-loaded; "
+                            "AIR-PolarSAR-Seg 6 类; cuda failed, retried on cpu)"
+                        )
+                        out_path = OUTPUT_DIR / f"sarmae_segment_{int(time.time())}.json"
+                        out_path.write_text(__import__("json").dumps(res), encoding="utf-8")
+                        return envelope(model=MODEL_NAME, task=task, result=res, device="cpu",
+                                        weights="SARMAE ViT-B/16 + fine-tuned UPerHead",
+                                        started_at=started, output_path=str(out_path))
+                    except Exception as cpu_exc:  # noqa: BLE001
+                        msg = f"{msg}; CPU retry failed: {cpu_exc}"
+                return envelope(model=MODEL_NAME, task=task, ok=False, error=f"SARMAE real-seg failed: {msg}", device=device, started_at=started)
             res["head_source"] = f"real fine-tuned UPerHead ({_SEG_CKPT.name}, strict-loaded; AIR-PolarSAR-Seg 6 类)"
             out_path = OUTPUT_DIR / f"sarmae_segment_{int(time.time())}.json"
             out_path.write_text(__import__("json").dumps(res), encoding="utf-8")
@@ -190,8 +258,30 @@ def run(image: str, task: str = "detect") -> dict[str, Any]:
                 out_path.write_text(__import__("json").dumps(res), encoding="utf-8")
                 return envelope(model=MODEL_NAME, task=task, result=res, device=device,
                                 weights="SARMAE ViT + fine-tuned rotated detector", started_at=started, output_path=str(out_path))
-            except ModelNotAvailableError:
-                pass  # mmrotate absent → fall through to the k-means proxy below
+            except ModelNotAvailableError as exc:
+                return envelope(model=MODEL_NAME, task=task, ok=False, error=str(exc), device=device,
+                                weights=str(_DETECT_CKPT), started_at=started)
+            except Exception as exc:  # noqa: BLE001 - surface real detector setup errors
+                detail = traceback.format_exc(limit=4)
+                msg = str(exc)
+                if device == "cuda" and ("cuDNN" in msg or "CUDNN" in msg):
+                    try:
+                        res = _real_detect(image_path, "cpu")
+                        res["head_source"] = (
+                            f"real fine-tuned rotated detector ({_DETECT_CKPT.name}, mmrotate; "
+                            "cuda cuDNN failed, retried on cpu)"
+                        )
+                        out_path = OUTPUT_DIR / f"sarmae_detect_{int(time.time())}.json"
+                        out_path.write_text(__import__("json").dumps(res), encoding="utf-8")
+                        return envelope(model=MODEL_NAME, task=task, result=res, device="cpu",
+                                        weights="SARMAE ViT + fine-tuned rotated detector",
+                                        started_at=started, output_path=str(out_path))
+                    except Exception as cpu_exc:  # noqa: BLE001
+                        detail += "\nCPU retry failed:\n" + traceback.format_exc(limit=4)
+                        msg = f"{msg}; CPU retry failed: {cpu_exc}"
+                return envelope(model=MODEL_NAME, task=task, ok=False,
+                                error=f"SARMAE real-detect failed with {_DETECT_CKPT}: {msg}\n{detail}",
+                                device=device, weights=str(_DETECT_CKPT), started_at=started)
 
         # --- FALLBACK: real encoder + unsupervised k-means proxy ---
         model = _load(device)

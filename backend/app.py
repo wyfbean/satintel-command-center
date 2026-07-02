@@ -38,7 +38,12 @@ from satintel_agents.agui import run_agent_stream  # noqa: E402
 app = FastAPI(title="SatIntel Agents", version="0.1.0")
 
 # CORS: comma-separated origins via env var; fallback to localhost for dev.
-_raw_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+_raw_origins = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:6006,http://127.0.0.1:6006,"
+    "http://u476023-t70g-cc1309f3.bjb1.seetacloud.com,https://u476023-t70g-cc1309f3.bjb1.seetacloud.com,"
+    "http://u476023-bbbx-8ee2c704.bjb1.seetacloud.com,https://u476023-bbbx-8ee2c704.bjb1.seetacloud.com",
+)
 _origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,

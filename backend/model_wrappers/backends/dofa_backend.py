@@ -31,14 +31,20 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..common import ModelNotAvailableError, OUTPUT_DIR, WEIGHTS_DIR, envelope, pick_device, resolve_image
+from ..common import MODEL_WEIGHT_ROOT, ModelNotAvailableError, OUTPUT_DIR, WEIGHTS_DIR, envelope, pick_device, resolve_image
 from ..schemas import DOFA_DATASET_HEADS
 
 MODEL_NAME = "dofa"
 _DEFAULT_RGB_WAVELENGTHS = [0.665, 0.56, 0.49]  # µm
 
+def _default_heads_dir() -> Path:
+    if any((MODEL_WEIGHT_ROOT / name / "best.pth").exists() for name in DOFA_DATASET_HEADS):
+        return MODEL_WEIGHT_ROOT
+    return WEIGHTS_DIR / "dofa_heads"
+
+
 # Fine-tuned UPerLite head checkpoints live at <DOFA_HEADS_DIR>/<dataset_head>/best.pth.
-_HEADS_DIR = Path(os.environ.get("DOFA_HEADS_DIR", str(WEIGHTS_DIR / "dofa_heads")))
+_HEADS_DIR = Path(os.environ.get("DOFA_HEADS_DIR", str(_default_heads_dir())))
 
 
 def _head_ckpt_path(dataset_head: str) -> Path:
@@ -52,6 +58,18 @@ N_CLUSTERS: dict[str, int] = {
     "m-chesapeake": 7,
     "m-nz-cattle": 2,
     "m-pv4ger-seg": 2,
+}
+
+_HEAD_DEFAULT_WAVELENGTHS: dict[str, list[float]] = {
+    "m-chesapeake": [0.49, 0.56, 0.665, 0.842],
+    "m-SA-crop-type": [0.443, 0.49, 0.56, 0.665, 0.705, 0.74, 0.783, 0.842, 0.865, 0.945, 1.61, 2.19],
+    "m-cashew-plant": [0.443, 0.49, 0.56, 0.665, 0.705, 0.74, 0.783, 0.842, 0.865, 0.945, 1.61, 2.19],
+}
+
+_HEAD_DEFAULT_BAND_NAMES: dict[str, list[str]] = {
+    "m-chesapeake": ["Blue", "Green", "Red", "NIR"],
+    "m-SA-crop-type": ["Coastal", "Blue", "Green", "Red", "RedEdge1", "RedEdge2", "RedEdge3", "NIR", "NarrowNIR", "WaterVapor", "SWIR1", "SWIR2"],
+    "m-cashew-plant": ["Coastal", "Blue", "Green", "Red", "RedEdge1", "RedEdge2", "RedEdge3", "NIR", "NarrowNIR", "WaterVapor", "SWIR1", "SWIR2"],
 }
 
 _model_cache: dict[str, Any] = {}
@@ -149,6 +167,9 @@ def run(image: str, task: str = "segment", dataset_head: str = "m-chesapeake", b
             try:
                 encoder = dofa_seg.load_encoder(WEIGHTS_DIR, device)
                 head, cfg = dofa_seg.load_head(head_ckpt, device)
+                cfg.setdefault("dataset", dataset_head)
+                cfg.setdefault("wavelengths", bands or _HEAD_DEFAULT_WAVELENGTHS.get(dataset_head))
+                cfg.setdefault("band_names", _HEAD_DEFAULT_BAND_NAMES.get(dataset_head))
                 res = dofa_seg.segment(encoder, head, image_path, cfg, device)
             except Exception as exc:  # noqa: BLE001 - any head/preproc failure → ok:false envelope, never crash
                 return envelope(model=MODEL_NAME, task=task, ok=False, error=f"DOFA real-head failed: {exc}", device=device, started_at=started)

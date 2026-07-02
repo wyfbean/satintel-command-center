@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CopilotKit, useCopilotAction, useCopilotChat, useCopilotReadable } from "@copilotkit/react-core";
 import { CopilotChat } from "@copilotkit/react-ui";
 import { Role, TextMessage } from "@copilotkit/runtime-client-gql";
+import { fromBlob } from "geotiff";
 import { AppSidebar } from "@/components/app-sidebar";
 
 /* ── public export ────────────────────────────────────────────────── */
@@ -27,6 +28,31 @@ type ToolRecord = { id: string; name: string; status: "pending" | "complete"; re
 type Region = { label: string; bbox: [number, number, number, number]; color: string; score: number };
 type ClassStat = { class_id: number; pixels?: number; ratio?: number };
 type Detection = { class?: string; confidence?: number; rbox?: number[]; bbox?: number[] };
+type AttachedImage = {
+  dataUrl: string;
+  name: string;
+  kind: "image" | "tiff";
+  rawRef?: string;
+  size?: number;
+  metadata?: ImageMetadata;
+};
+type ImageMetadata = {
+  sourceType: "raster-image" | "tiff-geotiff";
+  filename: string;
+  width: number;
+  height: number;
+  samplesPerPixel?: number;
+  bitsPerSample?: number[];
+  photometricInterpretation?: number;
+  bbox?: number[];
+  geoKeys?: Record<string, unknown>;
+  previewSamples?: number[];
+  previewMode?: "rgb" | "grayscale";
+  inferredBand?: string;
+  inferredRole?: string;
+  rawRef?: string;
+  note?: string;
+};
 
 // Distinct, high-contrast palette for segmentation class ids / detection boxes.
 const SEG_PALETTE = [
@@ -48,7 +74,8 @@ const STARTER_QUESTIONS = [
 /* ── workspace ────────────────────────────────────────────────────── */
 
 function OrchestrationWorkspace() {
-  const [image, setImage] = useState<{ dataUrl: string; name: string } | null>(null);
+  const [images, setImages] = useState<AttachedImage[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [toolLog, setToolLog] = useState<ToolRecord[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -56,6 +83,7 @@ function OrchestrationWorkspace() {
   // `visibleMessages` is undefined on the first render (before the agent connects),
   // despite its non-nullable type — guard it so we don't read `.length` of undefined.
   const conversationEmpty = (visibleMessages?.length ?? 0) === 0;
+  const primaryImage = images[0] ?? null;
 
   useEffect(() => {
     let active = true;
@@ -66,7 +94,15 @@ function OrchestrationWorkspace() {
     return () => { active = false; };
   }, []);
 
-  useCopilotReadable({ description: "attached_satellite_image", value: image?.dataUrl ?? "" });
+  useCopilotReadable({ description: "attached_satellite_image", value: primaryImage?.rawRef ?? primaryImage?.dataUrl ?? "" });
+  useCopilotReadable({
+    description: "attached_satellite_images",
+    value: images.length ? JSON.stringify(images.map(toAgentAttachment)) : "",
+  });
+  useCopilotReadable({
+    description: "attached_image_metadata",
+    value: images.length ? JSON.stringify(summarizeAttachments(images)) : "",
+  });
 
   useCopilotAction({
     name: "*",
@@ -86,13 +122,25 @@ function OrchestrationWorkspace() {
           return p.map((t) => (t.name === name && t.status === "pending") ? { ...t, status: "complete", result } : t);
         }));
       }
-      return <ToolCard name={name} args={args} status={status} result={result} image={image?.dataUrl ?? null} />;
+      return <ToolCard name={name} args={args} status={status} result={result} image={primaryImage?.dataUrl ?? null} />;
     },
   });
 
-  async function onPickImage(file: File) {
-    const dataUrl = await downscaleToDataUrl(file, 720);
-    setImage({ dataUrl, name: file.name });
+  async function onPickImages(files: FileList) {
+    setUploadError(null);
+    const selected = Array.from(files).slice(0, 12);
+    if (files.length > selected.length) {
+      setUploadError(`一次最多附加 ${selected.length} 张图像，已忽略其余文件`);
+    }
+    try {
+      const nextImages = await Promise.all(selected.map((file) => fileToAttachedImage(file, 720)));
+      setImages((prev) => [...prev, ...nextImages].slice(0, 12));
+    } catch (error) {
+      setImages([]);
+      setUploadError(error instanceof Error ? error.message : "无法解析该图像文件");
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
+    }
   }
 
   return (
@@ -119,26 +167,52 @@ function OrchestrationWorkspace() {
         {backendOnline === false && (
           <div className="border-b border-[#fde8d3] bg-[#fff7ed] px-4 py-2.5 text-xs text-[#c2410c]">
             运行：<code className="rounded bg-[#ffedd5] px-1 py-0.5">
-              cd backend && uv run uvicorn app:app --port 8000
+              cd backend && python -m uvicorn app:app --port 6008
             </code>
           </div>
         )}
 
         <div className="border-b border-[#e2e8f0] px-5 py-3">
-          <input ref={fileRef} type="file" accept="image/*" className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) void onPickImage(f); }} />
+          <input ref={fileRef} type="file" accept="image/*,.tif,.tiff,.geotiff" multiple className="hidden"
+            onChange={(e) => { const files = e.target.files; if (files?.length) void onPickImages(files); }} />
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => fileRef.current?.click()}
               className="flex-1 rounded-lg border border-dashed border-[#cbd5e1] px-3 py-2 text-xs text-slate-500 transition hover:border-[#3d74ff] hover:text-[#3d74ff]">
-              {image ? `📎 ${image.name}` : "+ 附加卫星图像"}
+              {images.length ? `📎 ${images.length} 张图像` : "+ 附加卫星图像"}
             </button>
-            {image && (
-              <button type="button" onClick={() => setImage(null)} className="rounded p-1 text-slate-400 hover:text-red-500">✕</button>
+            {images.length > 0 && (
+              <button type="button" onClick={() => setImages([])} className="rounded p-1 text-slate-400 hover:text-red-500">✕</button>
             )}
           </div>
-          {image && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={image.dataUrl} alt="已附加图像" className="mt-2 w-full rounded-lg object-cover" style={{ maxHeight: 120 }} />
+          {images.length > 0 && (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {images.map((item, index) => (
+                <div key={`${item.name}_${index}`} className="relative overflow-hidden rounded-lg border border-[#e2e8f0] bg-[#f8fafc]">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={item.dataUrl} alt="已附加图像" className="h-20 w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => setImages((prev) => prev.filter((_, i) => i !== index))}
+                    className="absolute right-1 top-1 rounded bg-white/90 px-1 text-[10px] text-slate-500 hover:text-red-500"
+                  >
+                    ✕
+                  </button>
+                  <div className="px-2 py-1">
+                    <div className="truncate text-[10px] font-medium text-slate-600" title={item.name}>{item.name}</div>
+                    {item.metadata && (
+                      <div className="truncate text-[10px] text-slate-400" title={formatImageMetadata(item.metadata)}>
+                        {formatImageMetadata(item.metadata)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {uploadError && (
+            <div className="mt-2 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-600">
+              {uploadError}
+            </div>
           )}
         </div>
 
@@ -456,6 +530,63 @@ function parseMaybeJson(v: unknown): unknown {
   return null;
 }
 
+function isTiffFile(file: File): boolean {
+  return /\.(tif|tiff|geotiff)$/i.test(file.name)
+    || ["image/tiff", "image/geotiff", "application/geotiff"].includes(file.type);
+}
+
+async function fileToAttachedImage(file: File, maxSize: number): Promise<AttachedImage> {
+  const [attached, rawRef] = await Promise.all([
+    isTiffFile(file) ? tiffToAttachedImage(file, maxSize) : browserImageToAttachedImage(file, maxSize),
+    uploadRawImage(file),
+  ]);
+  const band = inferBandFromName(file.name);
+  const metadata: ImageMetadata = {
+    ...attached.metadata,
+    sourceType: attached.metadata?.sourceType ?? (isTiffFile(file) ? "tiff-geotiff" : "raster-image"),
+    filename: file.name,
+    width: attached.metadata?.width ?? 0,
+    height: attached.metadata?.height ?? 0,
+    inferredBand: band?.band,
+    inferredRole: band?.role,
+    rawRef,
+  };
+  return { ...attached, rawRef, size: file.size, metadata };
+}
+
+async function uploadRawImage(file: File): Promise<string> {
+  const form = new FormData();
+  form.set("file", file);
+  const response = await fetch("/api/uploads/satellite", { method: "POST", body: form });
+  const payload = await response.json().catch(() => null) as { ok?: boolean; path?: string; error?: string } | null;
+  if (!response.ok || !payload?.ok || !payload.path) {
+    throw new Error(payload?.error ?? `原始影像上传失败 (${response.status})`);
+  }
+  return payload.path;
+}
+
+async function browserImageToAttachedImage(file: File, maxSize: number): Promise<AttachedImage> {
+  const dataUrl = await downscaleToDataUrl(file, maxSize);
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
+  const width = Math.round(bitmap.width * scale);
+  const height = Math.round(bitmap.height * scale);
+  bitmap.close();
+  return {
+    dataUrl,
+    name: file.name,
+    kind: "image",
+    metadata: {
+      sourceType: "raster-image",
+      filename: file.name,
+      width,
+      height,
+      samplesPerPixel: 3,
+      previewMode: "rgb",
+    },
+  };
+}
+
 async function downscaleToDataUrl(file: File, maxSize: number): Promise<string> {
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
@@ -465,7 +596,223 @@ async function downscaleToDataUrl(file: File, maxSize: number): Promise<string> 
   const ctx = canvas.getContext("2d");
   if (!ctx) return "";
   ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
   return canvas.toDataURL("image/jpeg", 0.82);
 }
 
+type TypedRaster = ArrayLike<number>;
+type GeoTiffDirectory = {
+  ImageWidth?: number;
+  ImageLength?: number;
+  SamplesPerPixel?: number;
+  BitsPerSample?: number | number[];
+  PhotometricInterpretation?: number;
+};
+type GeoTiffImageLike = {
+  getWidth: () => number;
+  getHeight: () => number;
+  getSamplesPerPixel?: () => number;
+  getBoundingBox?: () => number[];
+  getGeoKeys?: () => Record<string, unknown>;
+  fileDirectory?: GeoTiffDirectory;
+  readRasters: (options: {
+    samples?: number[];
+    width?: number;
+    height?: number;
+    interleave?: boolean;
+    resampleMethod?: "nearest" | "bilinear";
+  }) => Promise<unknown>;
+};
 
+async function tiffToAttachedImage(file: File, maxSize: number): Promise<AttachedImage> {
+  const tiff = await fromBlob(file);
+  const image = await tiff.getImage() as GeoTiffImageLike;
+  const sourceWidth = image.getWidth();
+  const sourceHeight = image.getHeight();
+  const scale = Math.min(1, maxSize / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+  const samplesPerPixel = getSamplesPerPixel(image);
+  const previewSamples = samplesPerPixel >= 3 ? [0, 1, 2] : [0];
+  const rasters = await image.readRasters({
+    samples: previewSamples,
+    width,
+    height,
+    interleave: false,
+    resampleMethod: "bilinear",
+  });
+  const bands = toBandArray(rasters);
+  if (bands.length === 0 || bands.some((band) => band.length < width * height)) {
+    throw new Error("TIFF 已读取，但未能生成可显示预览");
+  }
+
+  const dataUrl = rastersToDataUrl(bands, width, height, previewSamples.length >= 3);
+  const fileDirectory = image.fileDirectory ?? {};
+  const metadata: ImageMetadata = {
+    sourceType: "tiff-geotiff",
+    filename: file.name,
+    width: sourceWidth,
+    height: sourceHeight,
+    samplesPerPixel,
+    bitsPerSample: normalizeNumberArray(fileDirectory.BitsPerSample),
+    photometricInterpretation: fileDirectory.PhotometricInterpretation,
+    bbox: safeCallNumberArray(() => image.getBoundingBox?.()),
+    geoKeys: safeCallGeoKeys(() => image.getGeoKeys?.()),
+    previewSamples,
+    previewMode: previewSamples.length >= 3 ? "rgb" : "grayscale",
+    note: "The attached_satellite_image is a normalized preview derived from the TIFF/GeoTIFF; use this metadata to decide whether SAR or multispectral tools are appropriate.",
+  };
+
+  return { dataUrl, name: file.name, kind: "tiff", metadata };
+}
+
+function getSamplesPerPixel(image: GeoTiffImageLike): number {
+  const fromDirectory = image.fileDirectory?.SamplesPerPixel;
+  if (typeof fromDirectory === "number" && Number.isFinite(fromDirectory) && fromDirectory > 0) return fromDirectory;
+  const fromMethod = image.getSamplesPerPixel?.();
+  if (typeof fromMethod === "number" && Number.isFinite(fromMethod) && fromMethod > 0) return fromMethod;
+  return 1;
+}
+
+function toBandArray(rasters: unknown): TypedRaster[] {
+  if (!Array.isArray(rasters)) return [];
+  return rasters.filter((band): band is TypedRaster => Boolean(band) && typeof band === "object" && "length" in band);
+}
+
+function rastersToDataUrl(bands: TypedRaster[], width: number, height: number, rgb: boolean): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  const imageData = ctx.createImageData(width, height);
+  const stretches = bands.map((band) => bandStretch(band));
+  const firstBand = bands[0];
+  const firstStretch = stretches[0];
+
+  for (let i = 0; i < width * height; i++) {
+    const out = i * 4;
+    if (rgb && bands.length >= 3) {
+      imageData.data[out] = stretchValue(bands[0][i], stretches[0]);
+      imageData.data[out + 1] = stretchValue(bands[1][i], stretches[1]);
+      imageData.data[out + 2] = stretchValue(bands[2][i], stretches[2]);
+    } else {
+      const v = stretchValue(firstBand[i], firstStretch);
+      imageData.data[out] = v;
+      imageData.data[out + 1] = v;
+      imageData.data[out + 2] = v;
+    }
+    imageData.data[out + 3] = 255;
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/jpeg", 0.86);
+}
+
+function bandStretch(band: TypedRaster): { min: number; max: number } {
+  const values: number[] = [];
+  const stride = Math.max(1, Math.floor(band.length / 60000));
+  for (let i = 0; i < band.length; i += stride) {
+    const v = Number(band[i]);
+    if (Number.isFinite(v)) values.push(v);
+  }
+  if (values.length === 0) return { min: 0, max: 1 };
+  values.sort((a, b) => a - b);
+  const lo = values[Math.floor((values.length - 1) * 0.02)];
+  const hi = values[Math.floor((values.length - 1) * 0.98)];
+  if (hi > lo) return { min: lo, max: hi };
+  const min = values[0];
+  const max = values[values.length - 1];
+  return max > min ? { min, max } : { min: min - 1, max: max + 1 };
+}
+
+function stretchValue(value: number, stretch: { min: number; max: number }): number {
+  const normalized = (Number(value) - stretch.min) / (stretch.max - stretch.min);
+  return Math.max(0, Math.min(255, Math.round(normalized * 255)));
+}
+
+function normalizeNumberArray(value: number | number[] | undefined): number[] | undefined {
+  if (Array.isArray(value)) return value.filter((v) => Number.isFinite(v));
+  if (typeof value === "number" && Number.isFinite(value)) return [value];
+  return undefined;
+}
+
+function safeCallNumberArray(read: () => number[] | undefined): number[] | undefined {
+  try {
+    const value = read();
+    return Array.isArray(value) ? value.filter((v) => Number.isFinite(v)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeCallGeoKeys(read: () => Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  try {
+    const keys = read();
+    if (!keys || typeof keys !== "object") return undefined;
+    return Object.fromEntries(Object.entries(keys).slice(0, 32));
+  } catch {
+    return undefined;
+  }
+}
+
+function formatImageMetadata(metadata: ImageMetadata): string {
+  const type = metadata.sourceType === "tiff-geotiff" ? "TIFF/GeoTIFF" : "Image";
+  const bands = metadata.samplesPerPixel ? ` · ${metadata.samplesPerPixel} bands` : "";
+  const bits = metadata.bitsPerSample?.length ? ` · ${metadata.bitsPerSample.join("/")}-bit` : "";
+  const inferred = metadata.inferredBand ? ` · ${metadata.inferredBand}` : "";
+  return `${type} · ${metadata.width}×${metadata.height}${bands}${bits}${inferred}`;
+}
+
+function inferBandFromName(name: string): { band: string; role: string } | null {
+  const upper = name.toUpperCase();
+  const match = upper.match(/(?:^|[_\-.])B(0[1-9]|1[0-2]|8A|8)(?:[_\-.]|$)/);
+  let band: string | null = null;
+  if (match) {
+    band = match[1] === "8" ? "B08" : `B${match[1]}`;
+  } else if (/(?:^|[_\-.])(NIR|NEAR[_\-.]?INFRARED)(?:[_\-.]|$)/.test(upper)) {
+    band = "B08";
+  }
+  if (!band) return null;
+  const roles: Record<string, string> = {
+    B01: "coastal",
+    B02: "Blue",
+    B03: "Green",
+    B04: "Red",
+    B05: "RedEdge1",
+    B06: "RedEdge2",
+    B07: "RedEdge3",
+    B08: "NIR",
+    B8A: "NarrowNIR",
+    B09: "WaterVapor",
+    B10: "Cirrus",
+    B11: "SWIR1",
+    B12: "SWIR2",
+  };
+  return { band, role: roles[band] ?? band };
+}
+
+function toAgentAttachment(image: AttachedImage): Record<string, unknown> {
+  return {
+    name: image.name,
+    kind: image.kind,
+    rawRef: image.rawRef,
+    size: image.size,
+    metadata: image.metadata,
+  };
+}
+
+function summarizeAttachments(images: AttachedImage[]): Record<string, unknown> {
+  const bands = images
+    .map((image) => image.metadata?.inferredBand)
+    .filter((band): band is string => Boolean(band));
+  return {
+    count: images.length,
+    primary: images[0]?.metadata,
+    images: images.map((image) => image.metadata),
+    inferredBands: bands,
+    likelyMultiBandSet: bands.length >= 3,
+    note: images.length > 1
+      ? "Multiple attachments may represent separate spectral bands of one multispectral sample; match by inferredBand/rawRef before choosing DOFA multispectral heads."
+      : undefined,
+  };
+}

@@ -92,7 +92,12 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "sarmae": {
         "description": (
             "SARMAE — masked-autoencoder foundation model for SAR (Synthetic Aperture Radar) "
-            "imagery. Supports object detection and semantic segmentation on SAR scenes."
+            "imagery. Supports semantic segmentation on SAR/PolSAR scenes with a real "
+            "fine-tuned UPerHead (AIR-PolarSAR-Seg, 6 classes: Industrial, Natural, Water, "
+            "Land_Use, Housing, Other). Also supports SAR object detection with the real "
+            "fine-tuned mmrotate rotated detector checkpoint detect_epoch_34.pth; detection "
+            "may fall back to CPU if CUDA/cuDNN is incompatible. If the user asks to use "
+            "UPerHead/UPer for segmentation, call this tool with task='segment' directly."
         ),
         "input": {
             "type": "object",
@@ -108,14 +113,28 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "description": (
             "DOFA (Dynamic One-For-All) — wavelength-conditioned multispectral foundation model "
             "(ViT backbone + UPerNet head). Performs semantic segmentation against one of the "
-            "6 GEO-Bench dataset heads."
+            "6 GEO-Bench dataset heads. Important: ordinary uploaded images are RGB only. "
+            "RGB-compatible heads are task-specific: m-NeonTree for tree crowns, m-nz-cattle "
+            "for cattle, and m-pv4ger-seg for photovoltaic panels. m-chesapeake needs 4 bands "
+            "(Blue/Green/Red/NIR), satisfiable by separate B02/B03/B04/B08 TIFF uploads; "
+            "m-SA-crop-type and m-cashew-plant need 12-band Sentinel-2 input. Do not use "
+            "m-pv4ger-seg as a generic city/building/road segmentation fallback."
         ),
         "input": {
             "type": "object",
             "properties": {
                 "image": {"type": "string", "description": "Path or URL to the input image."},
                 "task": {"type": "string", "enum": ["segment"]},
-                "dataset_head": {"type": "string", "enum": DOFA_DATASET_HEADS},
+                "dataset_head": {
+                    "type": "string",
+                    "enum": DOFA_DATASET_HEADS,
+                    "description": (
+                        "Choose only when the input bands and user task match the head: "
+                        "m-NeonTree=RGB tree crown; m-nz-cattle=RGB cattle; "
+                        "m-pv4ger-seg=RGB photovoltaic panel; m-chesapeake=4-band land cover "
+                        "with B02/B03/B04/B08; m-SA-crop-type/m-cashew-plant=12-band multispectral."
+                    ),
+                },
                 "bands": {
                     "type": "array",
                     "items": {"type": "number"},

@@ -19,9 +19,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from huggingface_hub import hf_hub_download
-
-from ..common import ModelNotAvailableError, OUTPUT_DIR, WEIGHTS_DIR, envelope, pick_device, resolve_image
+from ..common import MODEL_WEIGHT_ROOT, ModelNotAvailableError, OUTPUT_DIR, WEIGHTS_DIR, envelope, pick_device, resolve_image
 
 MODEL_NAME = "sattxt"
 _HF_REPO = "chendelong/RemoteCLIP"
@@ -46,9 +44,15 @@ def _load(device: str):
     model, _, preprocess = open_clip.create_model_and_transforms(_ARCH)
     tokenizer = open_clip.get_tokenizer(_ARCH)
 
-    ckpt_path = WEIGHTS_DIR / "sattxt" / _HF_FILE
+    ckpt_candidates = [
+        WEIGHTS_DIR / "sattxt" / _HF_FILE,
+        MODEL_WEIGHT_ROOT / _HF_FILE,
+    ]
+    ckpt_path = next((p for p in ckpt_candidates if p.exists()), ckpt_candidates[0])
     if not ckpt_path.exists():
         try:
+            from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
             ckpt_path.parent.mkdir(parents=True, exist_ok=True)
             downloaded = hf_hub_download(repo_id=_HF_REPO, filename=_HF_FILE, local_dir=str(ckpt_path.parent))
             ckpt_path = Path(downloaded)

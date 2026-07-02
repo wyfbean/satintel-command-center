@@ -1,7 +1,8 @@
 """Shared plumbing for the model_wrappers package.
 
-- `WEIGHTS_DIR` / `OUTPUT_DIR`: gitignored local directories for downloaded
-  checkpoints and per-call artifacts (segmentation masks, overlays, ...).
+- `WEIGHTS_DIR` / `OUTPUT_DIR`: local directories for checkpoints and per-call
+  artifacts (segmentation masks, overlays, ...). On AutoDL/GPU hosts, defaults
+  point at `/root/autodl-tmp` so model weights never land in the repo volume.
 - `envelope(...)`: builds the standard result dict every wrapper returns.
 - `ModelNotAvailableError`: raised by a backend when its weights aren't present
   locally — carries a human-readable download hint so the orchestrator / chat
@@ -29,9 +30,26 @@ from pathlib import Path
 from typing import Any, Callable
 
 _PKG_DIR = Path(__file__).resolve().parent
+_DATA_DISK = Path("/root/autodl-tmp")
+_MODEL_WEIGHT_ROOT = _DATA_DISK / "model_weight"
 
-WEIGHTS_DIR = Path(os.environ.get("MODEL_WRAPPERS_WEIGHTS_DIR", _PKG_DIR / "weights"))
-OUTPUT_DIR = Path(os.environ.get("MODEL_WRAPPERS_OUTPUT_DIR", _PKG_DIR / "outputs"))
+
+def _default_model_weight_root() -> Path:
+    return _MODEL_WEIGHT_ROOT if _MODEL_WEIGHT_ROOT.exists() else _PKG_DIR / "weights"
+
+
+MODEL_WEIGHT_ROOT = Path(os.environ.get("MODEL_WEIGHT_ROOT", str(_default_model_weight_root())))
+
+
+def _default_wrappers_weights_dir() -> Path:
+    # The original development-machine copy under /root/autodl-tmp/model_weight
+    # keeps wrapper-managed downloads in mw_weights/ and task heads at the root.
+    mw_weights = MODEL_WEIGHT_ROOT / "mw_weights"
+    return mw_weights if mw_weights.exists() else MODEL_WEIGHT_ROOT
+
+
+WEIGHTS_DIR = Path(os.environ.get("MODEL_WRAPPERS_WEIGHTS_DIR", str(_default_wrappers_weights_dir())))
+OUTPUT_DIR = Path(os.environ.get("MODEL_WRAPPERS_OUTPUT_DIR", str(_DATA_DISK / "model_outputs")))
 WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -115,8 +133,9 @@ def pick_device() -> str:
 # dependency stack on the deployment GPU box. On machines without these envs
 # (e.g. this dev machine), `run_in_env` transparently falls back to in-process.
 CONDA_ENV_MAP: dict[str, str] = {
-    "skyeyegpt": "skyeyegpt",
+    "skyeyegpt": os.environ.get("SKYEYEGPT_CONDA_ENV", "/root/autodl-tmp/conda-envs/skyeyegpt"),
     "sarmae": "sarmae",
+    "sarmae-seg": os.environ.get("SARMAE_SEG_CONDA_ENV", "/root/autodl-tmp/conda-envs/sarmae-seg"),
     "dofa": "dofa",
     "sattxt": "dofa",  # shares the lightweight open_clip / torchgeo env
     "mtp": "mtp",
@@ -124,6 +143,8 @@ CONDA_ENV_MAP: dict[str, str] = {
 
 
 def _conda_env_exists(env_name: str) -> bool:
+    if os.path.isabs(env_name):
+        return Path(env_name).exists()
     conda = shutil.which("conda")
     if not conda:
         return False
@@ -145,11 +166,15 @@ def run_in_env(model: str, module: str, payload: dict[str, Any], in_process: Cal
     env_name = CONDA_ENV_MAP.get(model)
     conda = shutil.which("conda")
     if env_name and conda and _conda_env_exists(env_name):
+        env = os.environ.copy()
+        backend_root = str(_PKG_DIR.parent)
+        env["PYTHONPATH"] = backend_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         proc = subprocess.run(
-            [conda, "run", "-n", env_name, sys.executable, "-m", module, json.dumps(payload, ensure_ascii=False)],
+            [conda, "run", "-p" if os.path.isabs(env_name) else "-n", env_name, "python", "-m", module, json.dumps(payload, ensure_ascii=False)],
             capture_output=True,
             text=True,
             cwd=_PKG_DIR.parent,
+            env=env,
             timeout=600,
         )
         lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]

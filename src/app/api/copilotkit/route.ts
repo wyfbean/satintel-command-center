@@ -28,10 +28,10 @@ import { SatelliteDashboardAgent } from "@/lib/a2a/dashboard-agent";
 const runtime = new CopilotRuntime({
   agents: {
     satelliteAnalyst: new HttpAgent({
-      url: process.env.AGENT_BACKEND_URL ?? "http://127.0.0.1:8000/agent",
+      url: process.env.AGENT_BACKEND_URL ?? "http://127.0.0.1:6008/agent",
     }),
     magneticOrchestrator: new HttpAgent({
-      url: process.env.ORCHESTRATOR_BACKEND_URL ?? "http://127.0.0.1:8000/orchestrator/agent",
+      url: process.env.ORCHESTRATOR_BACKEND_URL ?? "http://127.0.0.1:6008/orchestrator/agent",
     }),
     satellite_dashboard: new SatelliteDashboardAgent(),
   },

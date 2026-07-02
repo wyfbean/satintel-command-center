@@ -31,9 +31,11 @@
 
 | 变量 | 作用 | 示例值 |
 |---|---|---|
-| `MODEL_WRAPPERS_WEIGHTS_DIR` | 主权重根目录 | `/data/sat-models/mw_weights` |
-| `DOFA_HEADS_DIR` | DOFA 微调分割头根目录 | `/data/sat-models/dofa_heads` |
-| `SARMAE_HEADS_DIR` | SARMAE 分割/检测头目录 | `/data/sat-models/sarmae_heads` |
+| `MODEL_WEIGHT_ROOT` | 本机原开发机权重根目录 | `/root/autodl-tmp/model_weight` |
+| `MODEL_WRAPPERS_WEIGHTS_DIR` | wrapper 主权重根目录 | `/root/autodl-tmp/model_weight/mw_weights` |
+| `MODEL_WRAPPERS_OUTPUT_DIR` | 推理输出目录 | `/root/autodl-tmp/model_outputs` |
+| `DOFA_HEADS_DIR` | DOFA 微调分割头根目录 | `/root/autodl-tmp/model_weight` |
+| `SARMAE_HEADS_DIR` | SARMAE 分割/检测头目录 | `/root/autodl-tmp/model_weight/sarmae_seg_detect_weights` |
 | `SARMAE_DETECT_CONFIG` | SARMAE 旋转检测 mmrotate 配置 `.py` | `/data/.../vitb_ssdd.py` |
 | `SARMAE_DETECT_REPO` | SARMAE 检测代码仓库（注册自定义 ViT backbone，加进 `sys.path`） | `/data/.../SARMAE_Fintune/Detection` |
 | `OPENAI_API_KEY`（+ `OPENAI_BASE_URL`/`OPENAI_MODEL`） | 编排智能体的 LLM；不设则跑确定性模拟脚本 | —（**仅按名设置，勿外泄**） |
@@ -142,19 +144,19 @@ uv run uvicorn app:app --host 0.0.0.0 --port 8000
 
 ## 四、⚠️ conda 环境切换的关键提醒（mtp/sarmae-detect 必读）
 
-`common.py:CONDA_ENV_MAP` 把模型映射到 conda 环境名：`skyeyegpt→skyeyegpt`、`sarmae→sarmae`、`dofa→dofa`、**`sattxt→dofa`**、`mtp→mtp`。建好同名 env 后，`run_in_env` 会用 `conda run -n <env>` 调度；没有则本进程执行。
+`common.py:CONDA_ENV_MAP` 把模型映射到 conda 环境名：`skyeyegpt→skyeyegpt`、`sarmae→sarmae`、`dofa→dofa`、**`sattxt→dofa`**、`mtp→mtp`。建好同名 env 后，`run_in_env` 会用 `conda run -n <env> python -m ...` 调度；没有则本进程执行。
 
 有三个**必须知道**的点：
 
 1. **切换粒度是「按模型」不是「按任务」**：`sarmae` seg（torch+timm）和 `sarmae` detect（mmrotate）共用同一个 `sarmae` env → 该 env 必须是**超集**（同时含 timm 与 mmrotate），否则启用 detect 会把 seg 弄坏。`dofa` env 同理（且因 `sattxt→dofa`，`dofa` env 还需含 `open_clip`）。
 
-2. **`run_in_env` 当前传的是 `sys.executable`（=base 解释器绝对路径）**：`conda run -n env /abs/base/python -m mod` 实际仍用 **base 的 site-packages**，不会用 env 里的包。也就是说**目前 conda 切换并未真正生效**（base-compatible 模型因此「碰巧」一直正常）。要让独立 env 真正生效，把 `common.py:149` 的 `sys.executable` 改成字符串 `"python"`（由 `conda run` 在 env 内解析）。
+2. **`run_in_env` 已修复为传 `"python"` 而不是 `sys.executable`**：`conda run -n env python -m mod` 会使用目标 env 内的解释器和 site-packages，并注入 backend 根目录到 `PYTHONPATH`。
    - 对 **mtp 这是硬性前置**（torch 1.10 无法与 base 现代 torch 共存，必须在独立 env 跑）。
    - 改完后请注意第 1 点：若 `sarmae`/`dofa` env 是半成品（缺 timm/open_clip），原本正常的 seg/分类会**回归报错**。改 `run_in_env` 与「env 必须是超集」要一起做。
 
 3. **推荐策略（省事且避坑）**：base-compatible 的 `sattxt` / `dofa`(分割) / `sarmae`(分割) **不要建对应 conda env**（让 `run_in_env` 回退到 base 进程内，直接可用）；只为依赖冲突的 **`mtp`**（以及 `sarmae` detect 的 mmrotate 栈）建独立 env，并配合第 2 点的 `run_in_env` 修复。
 
-> 本机无 conda，上述第 2 点为代码分析结论而非实测，请在模型机实测确认后再依赖按模型切换。需要的话我可以直接把 `run_in_env` 的 `sys.executable→"python"` 改掉。
+> 本机没有完整的 `mtp` / `sarmae` 检测 conda 环境；环境切换逻辑已按代码路径修复，仍需在装好对应 env 后做端到端实测。
 
 ---
 
@@ -162,8 +164,8 @@ uv run uvicorn app:app --host 0.0.0.0 --port 8000
 
 1. `uv sync --extra models` + `download_weights all` + 拷微调头 + 写 `.env` → 起服务。
 2. 逐个跑 §三 的冒烟命令：`sattxt`、`dofa`(RGB head)、`sarmae` segment **应立即 `ok:true`**。
-3. `sarmae` detect：建 `sarmae`(mmrotate 超集) env + 配 `SARMAE_DETECT_CONFIG/REPO` + 修 `run_in_env` → `ok:true` 且 `head_source` 含 `rotated detector`。
-4. `mtp`：建 `mtp` env + 放 config+ckpt + 修 `run_in_env` → `ok:true` detections。
+3. `sarmae` detect：建 `sarmae`(mmrotate 超集) env + 配 `SARMAE_DETECT_CONFIG/REPO` → `ok:true` 且 `head_source` 含 `rotated detector`。
+4. `mtp`：建 `mtp` env + 放 config+ckpt → `ok:true` detections。
 5. `skyeyegpt`：实现推理脚本后再启用。
 6. 前端 `/orchestration` 端到端：上传图 + 提问，工具卡应渲染分割掩码 / 检测框（前端已支持 `mask` 彩色叠加与旋转/水平框）。
 

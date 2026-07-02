@@ -18,6 +18,7 @@ standardization approximation. Drop real stats into `_BAND_STATS` to make it exa
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import pathlib
 import sys
@@ -41,7 +42,14 @@ _head_cache: dict[str, Any] = {}
 # --------------------------------------------------------------------------- #
 
 def _repo_dir(weights_dir: Path) -> Path:
-    return weights_dir / "torch_hub" / "zhu-xlab_DOFA_master"
+    candidates = [
+        weights_dir / "torch_hub" / "zhu-xlab_DOFA_master",
+        weights_dir.parent / "DOFA",
+    ]
+    for candidate in candidates:
+        if (candidate / "wave_dynamic_layer.py").exists():
+            return candidate
+    return candidates[0]
 
 
 def load_encoder(weights_dir: Path, device: str):
@@ -61,9 +69,13 @@ def load_encoder(weights_dir: Path, device: str):
     spec.loader.exec_module(mod)
     encoder = mod.vit_base_patch16(img_size=224, drop_path_rate=0.0)
 
-    ckpt = weights_dir / "torch_hub" / "checkpoints" / "DOFA_ViT_base_e100.pth"
+    ckpt_candidates = [
+        weights_dir / "torch_hub" / "checkpoints" / "DOFA_ViT_base_e100.pth",
+        weights_dir.parent / "DOFA_ViT_base_e100.pth",
+    ]
+    ckpt = next((p for p in ckpt_candidates if p.exists()), ckpt_candidates[0])
     if not ckpt.exists():
-        raise FileNotFoundError(f"DOFA backbone not found at {ckpt}")
+        raise FileNotFoundError(f"DOFA backbone not found at any of: {', '.join(str(p) for p in ckpt_candidates)}")
     state = torch.load(ckpt, map_location="cpu", weights_only=False)
     state = state.get("model", state) if isinstance(state, dict) else state
     msg = encoder.load_state_dict(state, strict=False)
@@ -191,23 +203,86 @@ def normalize_bands(chw, dataset: str, band_names: list[str]):
 
 # PIL RGB → channel index for a given band name (heads order bands as in config).
 _BAND_TO_RGB_IDX = {"Red": 0, "Green": 1, "Blue": 2}
+_ROLE_ALIASES = {
+    "coastal": "Coastal",
+    "coastal aerosol": "Coastal",
+    "blue": "Blue",
+    "green": "Green",
+    "red": "Red",
+    "rededge1": "RedEdge1",
+    "red edge 1": "RedEdge1",
+    "rededge2": "RedEdge2",
+    "red edge 2": "RedEdge2",
+    "rededge3": "RedEdge3",
+    "red edge 3": "RedEdge3",
+    "nir": "NIR",
+    "nearinfrared": "NIR",
+    "near infrared": "NIR",
+    "near-infrared": "NIR",
+    "near_infrared": "NIR",
+    "narrow nir": "NarrowNIR",
+    "narrownir": "NarrowNIR",
+    "watervapor": "WaterVapor",
+    "water vapor": "WaterVapor",
+    "swir1": "SWIR1",
+    "swir 1": "SWIR1",
+    "swir2": "SWIR2",
+    "swir 2": "SWIR2",
+}
+_BAND_TO_ROLE = {
+    "B01": "Coastal",
+    "B02": "Blue",
+    "B03": "Green",
+    "B04": "Red",
+    "B05": "RedEdge1",
+    "B06": "RedEdge2",
+    "B07": "RedEdge3",
+    "B08": "NIR",
+    "B8A": "NarrowNIR",
+    "B09": "WaterVapor",
+    "B10": "Cirrus",
+    "B11": "SWIR1",
+    "B12": "SWIR2",
+}
 
 
 def preprocess(image_path: Path, cfg: dict, device: str):
     """Load image, reorder/normalize to the head's band layout. Returns ([1,C,224,224], (w,h))."""
     import torch  # noqa: PLC0415
     from PIL import Image  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
 
     # The encoder is wavelength-conditioned; #input channels MUST equal #wavelengths.
-    # An RGB upload only has 3 channels → only 3-band (RGB) heads are satisfiable.
     wavelengths = cfg.get("wavelengths") or [0.49, 0.56, 0.665]
+    if image_path.suffix.lower() == ".json":
+        manifest = json.loads(image_path.read_text(encoding="utf-8"))
+        if manifest.get("type") != "satintel_multiband_manifest":
+            raise ValueError(f"unsupported DOFA manifest type: {manifest.get('type')}")
+        sources = manifest.get("sources")
+        if not isinstance(sources, list):
+            raise ValueError("DOFA multiband manifest missing sources")
+        expected = _expected_band_order(cfg, len(wavelengths))
+        source_by_role = {_canonical_role(src.get("role") or src.get("band")): src for src in sources if isinstance(src, dict)}
+        source_by_band = {str(src.get("band", "")).upper(): src for src in sources if isinstance(src, dict)}
+        arrays = []
+        size: tuple[int, int] | None = None
+        for role in expected:
+            src = source_by_role.get(_canonical_role(role)) or source_by_band.get(_role_to_band(role))
+            if not src or not isinstance(src.get("path"), str):
+                raise ValueError(f"multiband input missing required band/role '{role}'")
+            arr, size = _read_single_band(Path(src["path"]), size)
+            arrays.append(arr)
+        chan = torch.from_numpy(np.stack(arrays, axis=0).astype("float32"))
+        chan = normalize_bands(chan, cfg.get("dataset", ""), expected)
+        return chan.unsqueeze(0).to(device), size or (224, 224)
+
     if len(wavelengths) != 3:
         raise ValueError(
             f"head '{cfg.get('dataset')}' needs {len(wavelengths)}-band multispectral input; an RGB "
-            "upload cannot satisfy it. Use an RGB-only head (m-pv4ger-seg/m-NeonTree/m-nz-cattle)."
+            "upload cannot satisfy it. Upload the corresponding single-band TIFF files (for example "
+            "B02/B03/B04/B08 for m-chesapeake) or use an RGB-only head (m-pv4ger-seg/m-NeonTree/m-nz-cattle)."
         )
     img = Image.open(image_path).convert("RGB").resize((224, 224))
-    import numpy as np  # noqa: PLC0415
 
     arr = torch.from_numpy(np.asarray(img, dtype="float32")).permute(2, 0, 1)  # [3,H,W] = R,G,B
     # RGB heads order bands as [Blue,Green,Red] (wavelengths 0.49/0.56/0.665). Honour an
@@ -217,6 +292,52 @@ def preprocess(image_path: Path, cfg: dict, device: str):
     chan = torch.stack([arr[_BAND_TO_RGB_IDX[b]] for b in order], dim=0)
     chan = normalize_bands(chan, cfg.get("dataset", ""), order)
     return chan.unsqueeze(0).to(device), img.size
+
+
+def _expected_band_order(cfg: dict, count: int) -> list[str]:
+    names = cfg.get("band_names")
+    if isinstance(names, list) and len(names) == count:
+        return [_canonical_role(str(name)) for name in names]
+    if count == 4:
+        return ["Blue", "Green", "Red", "NIR"]
+    if count == 12:
+        return ["Coastal", "Blue", "Green", "Red", "RedEdge1", "RedEdge2", "RedEdge3", "NIR", "NarrowNIR", "WaterVapor", "SWIR1", "SWIR2"]
+    return [f"Band{i + 1}" for i in range(count)]
+
+
+def _canonical_role(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    upper = text.upper()
+    if upper in _BAND_TO_ROLE:
+        return _BAND_TO_ROLE[upper]
+    normalized = text.lower().replace("_", " ").replace("-", " ")
+    compact = normalized.replace(" ", "")
+    return _ROLE_ALIASES.get(normalized) or _ROLE_ALIASES.get(compact) or text.replace("_", "").replace("-", "")
+
+
+def _role_to_band(role: str) -> str:
+    canonical = _canonical_role(role)
+    for band, band_role in _BAND_TO_ROLE.items():
+        if band_role == canonical:
+            return band
+    return canonical.upper()
+
+
+def _read_single_band(path: Path, target_size: tuple[int, int] | None):
+    from PIL import Image  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    img = Image.open(path)
+    source_size = img.size
+    if target_size is None:
+        target_size = source_size
+    img = img.resize((224, 224))
+    arr = np.asarray(img, dtype="float32")
+    if arr.ndim == 3:
+        arr = arr[:, :, 0]
+    return arr, target_size
 
 
 def segment(encoder, head, image_path: Path, cfg: dict, device: str, grid: int = 56) -> dict[str, Any]:
