@@ -1,0 +1,23 @@
+name: sarmae
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - pip
+  # SARMAE real detection uses MMRotate/MMDetection. Keep this separate from
+  # the service/base env because mmcv/mmrotate version pins conflict easily.
+  - pip:
+      - numpy<2
+      - pillow
+      - opencv-python
+      - scipy
+      - terminaltables
+      - pycocotools
+      - timm
+      - mmdet
+      - mmrotate
+      # Install an mmcv wheel compatible with this env/GPU, for example:
+      # mim install "mmcv==2.0.0"

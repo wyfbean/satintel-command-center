@@ -1,0 +1,10 @@
+ag-ui-protocol>=0.1.18
+crewai>=1.14.6
+crewai-tools[mcp]>=1.14.6
+fastapi>=0.136.3
+mcp>=1.26.0
+openai>=2.38.0
+python-dotenv>=1.2.2
+python-multipart>=0.0.29
+uvicorn[standard]>=0.48.0
+httpx[socks]>=0.28.1

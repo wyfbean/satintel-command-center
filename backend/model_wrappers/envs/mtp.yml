@@ -1,0 +1,23 @@
+name: mtp
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - pip
+  # MTP upstream is tied to the OpenMMLab detection stack. Install CUDA/torch
+  # versions to match the target GPU driver. The pip block below is a starting
+  # point; if mmcv wheels are unavailable for the CUDA runtime, use OpenMIM.
+  - pip:
+      - numpy<2
+      - pillow
+      - opencv-python
+      - scipy
+      - terminaltables
+      - pycocotools
+      - mmdet>=3.1.0
+      - mmrotate>=1.0.0rc1
+      # Install mmcv with the correct CUDA wheel for the host, for example:
+      # mim install "mmcv==2.0.0"

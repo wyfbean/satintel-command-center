@@ -2,11 +2,11 @@ import type { NextConfig } from "next";
 
 // The Python CrewAI backend.  Override with AGENT_BACKEND_URL in .env.local.
 const AGENT_BACKEND =
-  (process.env.AGENT_BACKEND_URL ?? "http://127.0.0.1:8000").replace(/\/agent\/?$/, "");
+  (process.env.AGENT_BACKEND_URL ?? "http://127.0.0.1:6008").replace(/\/agent\/?$/, "");
 
 // CORS headers applied to every /api/* response (including preflight OPTIONS).
 // Adjust CORS_ORIGIN in .env.local when deploying to a specific domain.
-const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "*";
+const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "https://u476023-bbbx-8ee2c704.bjb1.seetacloud.com";
 
 const corsHeaders = [
   { key: "Access-Control-Allow-Origin",      value: CORS_ORIGIN },
@@ -23,7 +23,11 @@ const nextConfig: NextConfig = {
   // Allow dev-server HMR/asset requests from non-localhost hosts (e.g. the
   // WSL2 / Docker bridge interface 172.18.0.1, or a LAN IP). Next 16 blocks
   // cross-origin access to /_next/* dev resources by default.
-  allowedDevOrigins: ["172.18.0.1"],
+  allowedDevOrigins: [
+    "172.18.0.1",
+    "u476023-t70g-cc1309f3.bjb1.seetacloud.com",
+    "u476023-bbbx-8ee2c704.bjb1.seetacloud.com",
+  ],
 
   // Transpile the globe stack's untranspiled ESM for consistent bundling. (Note:
   // the production-build hang we hit was caused by satellite.js v7's WASM build
