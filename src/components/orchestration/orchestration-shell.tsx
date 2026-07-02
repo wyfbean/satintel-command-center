@@ -24,7 +24,6 @@ export function OrchestrationShell() {
 
 /* ── types ────────────────────────────────────────────────────────── */
 
-type ToolRecord = { id: string; name: string; status: "pending" | "complete"; result: unknown };
 type Region = { label: string; bbox: [number, number, number, number]; color: string; score: number };
 type ClassStat = { class_id: number; pixels?: number; ratio?: number };
 type Detection = { class?: string; confidence?: number; rbox?: number[]; bbox?: number[] };
@@ -77,7 +76,6 @@ function OrchestrationWorkspace() {
   const [images, setImages] = useState<AttachedImage[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
-  const [toolLog, setToolLog] = useState<ToolRecord[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const { visibleMessages, appendMessage, isLoading } = useCopilotChat();
   // `visibleMessages` is undefined on the first render (before the agent connects),
@@ -107,21 +105,6 @@ function OrchestrationWorkspace() {
   useCopilotAction({
     name: "*",
     render: ({ name, args, status, result }: { name: string; args: unknown; status: string; result: unknown }) => {
-      if (status === "inProgress") {
-        // Defer past the current render/effect pass — CopilotKit invokes this render
-        // callback from inside its own useEffect, so a synchronous setState here
-        // triggers React's "update while rendering a different component" warning.
-        queueMicrotask(() => setToolLog((p) => {
-          if (p.some((t) => t.name === name && t.status === "pending")) return p;
-          return [{ id: `${Date.now()}_${name}`, name, status: "pending", result: null }, ...p.slice(0, 19)];
-        }));
-      }
-      if (status === "complete") {
-        queueMicrotask(() => setToolLog((p) => {
-          if (!p.some((t) => t.name === name && t.status === "pending")) return p;
-          return p.map((t) => (t.name === name && t.status === "pending") ? { ...t, status: "complete", result } : t);
-        }));
-      }
       return <ToolCard name={name} args={args} status={status} result={result} image={primaryImage?.dataUrl ?? null} />;
     },
   });
@@ -144,136 +127,42 @@ function OrchestrationWorkspace() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden">
-      {/* ── left panel ── */}
-      <div className="flex w-72 flex-none flex-col border-r border-[#e2e8f0] bg-white xl:w-80">
-        <div className="border-b border-[#e2e8f0] px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#3d74ff]">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-                <circle cx="12" cy="8" r="4" /><path d="M6 20v-1a6 6 0 0 1 12 0v1" />
-              </svg>
-            </div>
-            <div>
-              <div className="text-sm font-semibold">遥感分析智能体</div>
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                <span className={`h-1.5 w-1.5 rounded-full ${backendOnline === true ? "bg-[#22c55e]" : backendOnline === false ? "bg-red-400" : "bg-amber-400"}`} />
-                {backendOnline === true ? "在线 · Magnetic-One" : backendOnline === false ? "后端离线" : "连接中…"}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {backendOnline === false && (
-          <div className="border-b border-[#fde8d3] bg-[#fff7ed] px-4 py-2.5 text-xs text-[#c2410c]">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#f9fafb]">
+      <input ref={fileRef} type="file" accept="image/*,.tif,.tiff,.geotiff" multiple className="hidden"
+        onChange={(e) => { const files = e.target.files; if (files?.length) void onPickImages(files); }} />
+      {backendOnline === false && (
+        <div className="mx-auto mt-3 w-full max-w-4xl px-4">
+          <div className="rounded-lg border border-[#fde8d3] bg-[#fff7ed] px-3 py-2 text-xs text-[#c2410c]">
             运行：<code className="rounded bg-[#ffedd5] px-1 py-0.5">
               cd backend && python -m uvicorn app:app --port 6008
             </code>
           </div>
-        )}
-
-        <div className="border-b border-[#e2e8f0] px-5 py-3">
-          <input ref={fileRef} type="file" accept="image/*,.tif,.tiff,.geotiff" multiple className="hidden"
-            onChange={(e) => { const files = e.target.files; if (files?.length) void onPickImages(files); }} />
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={() => fileRef.current?.click()}
-              className="flex-1 rounded-lg border border-dashed border-[#cbd5e1] px-3 py-2 text-xs text-slate-500 transition hover:border-[#3d74ff] hover:text-[#3d74ff]">
-              {images.length ? `📎 ${images.length} 张图像` : "+ 附加卫星图像"}
-            </button>
-            {images.length > 0 && (
-              <button type="button" onClick={() => setImages([])} className="rounded p-1 text-slate-400 hover:text-red-500">✕</button>
-            )}
-          </div>
-          {images.length > 0 && (
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {images.map((item, index) => (
-                <div key={`${item.name}_${index}`} className="relative overflow-hidden rounded-lg border border-[#e2e8f0] bg-[#f8fafc]">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={item.dataUrl} alt="已附加图像" className="h-20 w-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() => setImages((prev) => prev.filter((_, i) => i !== index))}
-                    className="absolute right-1 top-1 rounded bg-white/90 px-1 text-[10px] text-slate-500 hover:text-red-500"
-                  >
-                    ✕
-                  </button>
-                  <div className="px-2 py-1">
-                    <div className="truncate text-[10px] font-medium text-slate-600" title={item.name}>{item.name}</div>
-                    {item.metadata && (
-                      <div className="truncate text-[10px] text-slate-400" title={formatImageMetadata(item.metadata)}>
-                        {formatImageMetadata(item.metadata)}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {uploadError && (
-            <div className="mt-2 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-600">
-              {uploadError}
-            </div>
-          )}
         </div>
-
-        <div className="flex-1 overflow-y-auto px-4 py-3">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">工具调用记录</div>
-          {toolLog.length === 0 ? (
-            <div className="rounded-lg bg-[#f8fafc] px-3 py-6 text-center text-xs text-slate-400">发送消息后工具调用会显示在此</div>
-          ) : (
-            <div className="space-y-2">
-              {toolLog.map((t) => (
-                <div key={t.id} className={`rounded-lg border p-2.5 text-xs ${t.status === "complete" ? "border-[#dcfce7] bg-[#f0fdf4]" : "border-[#e2e8f0] bg-white"}`}>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono font-semibold text-[#3d74ff]">{t.name}</span>
-                    <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${t.status === "complete" ? "bg-[#dcfce7] text-[#15803d]" : "bg-[#fef9c3] text-[#854d0e]"}`}>
-                      {t.status === "complete" ? "✓" : "⋯"}
-                    </span>
-                  </div>
-                  {Boolean(t.result) && (
-                    <div className="mt-1 truncate text-slate-400">
-                      {summarizeResult(t.result)}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+      )}
+      {conversationEmpty && (
+        <div className="mx-auto w-full max-w-4xl px-4 pt-3">
+          <SuggestedQuestions
+            disabled={Boolean(isLoading)}
+            onPick={(q) => { void appendMessage?.(new TextMessage({ content: q, role: Role.User })); }}
+          />
         </div>
-
-        <div className="border-t border-[#e2e8f0] px-5 py-3">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            可用模型工具
-          </div>
-          <div className="space-y-1 text-xs">
-            {["skyeyegpt", "sarmae", "dofa", "sattxt", "mtp"].map((t) => (
-              <div key={t} className="flex items-center gap-2 text-slate-500">
-                <span className="h-1.5 w-1.5 rounded-full bg-[#3d74ff]" />
-                <span className="font-mono">{t}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ── main chat ── */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {conversationEmpty && (
-          <div className="border-b border-[#e2e8f0] bg-white px-6 py-3">
-            <SuggestedQuestions
-              disabled={Boolean(isLoading)}
-              onPick={(q) => { void appendMessage?.(new TextMessage({ content: q, role: Role.User })); }}
-            />
-          </div>
-        )}
-        <div className="min-h-0 flex-1 overflow-hidden bg-[#f9fafb]">
+      )}
+      <div className="min-h-0 flex-1 overflow-hidden px-0 pb-0">
+        <div className="relative h-full [&_.copilotKitHeader]:hidden [&_.copilotKitInputContainer]:border-t [&_.copilotKitInputContainer]:border-[#e2e8f0] [&_.copilotKitInputContainer]:bg-white [&_.copilotKitInputContainer]:pt-2 [&_.copilotKitMessages]:bg-[#f9fafb]">
           <CopilotChat
             className="h-full"
             labels={{
-              title: "遥感分析智能体",
-              initial: "你好，我是遥感分析智能体。描述分析需求，或附加卫星 / SAR 图像后提问，我会调用 DOFA / SATtxt / MTP 等模型工具完成分析。",
+              title: "",
+              initial: "描述分析需求，或附加卫星 / SAR 图像后提问，我会调用 DOFA / SATtxt / MTP 等模型工具完成分析。",
               placeholder: "描述分析任务，或附加图像后提问……",
             }}
+          />
+          <AttachmentComposer
+            images={images}
+            uploadError={uploadError}
+            onAdd={() => fileRef.current?.click()}
+            onClear={() => setImages([])}
+            onRemove={(index) => setImages((prev) => prev.filter((_, i) => i !== index))}
           />
         </div>
       </div>
@@ -285,8 +174,7 @@ function OrchestrationWorkspace() {
 
 function SuggestedQuestions({ disabled, onPick }: { disabled: boolean; onPick: (q: string) => void }) {
   return (
-    <div>
-      <div className="mb-2 text-[11px] font-medium text-slate-400">引导问题 · 点击直接提问</div>
+    <div className="rounded-lg border border-[#e2e8f0] bg-white px-3 py-2 shadow-sm">
       <div className="flex flex-wrap gap-2">
         {STARTER_QUESTIONS.map((q) => (
           <button
@@ -299,6 +187,81 @@ function SuggestedQuestions({ disabled, onPick }: { disabled: boolean; onPick: (
             {q}
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function AttachmentComposer({
+  images,
+  uploadError,
+  onAdd,
+  onClear,
+  onRemove,
+}: {
+  images: AttachedImage[];
+  uploadError: string | null;
+  onAdd: () => void;
+  onClear: () => void;
+  onRemove: (index: number) => void;
+}) {
+  return (
+    <div className="pointer-events-none absolute bottom-[96px] left-1/2 z-10 w-full max-w-4xl -translate-x-1/2 px-4">
+      <div className="pointer-events-auto rounded-xl border border-[#e2e8f0] bg-white/95 p-2 shadow-sm backdrop-blur">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onAdd}
+            className="flex h-9 w-9 flex-none items-center justify-center rounded-full border border-[#dbe4ff] bg-[#f5f8ff] text-lg leading-none text-[#2f62d9] transition hover:border-[#3d74ff] hover:bg-[#eaf1ff]"
+            title="附加图像"
+          >
+            +
+          </button>
+          {images.length === 0 ? (
+            <button
+              type="button"
+              onClick={onAdd}
+              className="truncate text-xs text-slate-400 hover:text-[#2f62d9]"
+            >
+              附加卫星图像、SAR 图像或多光谱 TIFF
+            </button>
+          ) : (
+            <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto">
+              {images.map((item, index) => (
+                <div key={`${item.name}_${index}`} className="flex w-48 flex-none items-center gap-2 rounded-lg border border-[#e2e8f0] bg-[#f8fafc] p-1.5">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={item.dataUrl} alt="已附加图像" className="h-10 w-10 flex-none rounded object-cover" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[11px] font-medium text-slate-600" title={item.name}>{item.name}</div>
+                    {item.metadata && (
+                      <div className="truncate text-[10px] text-slate-400" title={formatImageMetadata(item.metadata)}>
+                        {formatImageMetadata(item.metadata)}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onRemove(index)}
+                    className="flex h-5 w-5 flex-none items-center justify-center rounded-full text-xs text-slate-400 hover:bg-red-50 hover:text-red-500"
+                    title="移除"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {images.length > 0 && (
+            <button type="button" onClick={onClear} className="flex-none rounded px-2 py-1 text-xs text-slate-400 hover:text-red-500">
+              清空
+            </button>
+          )}
+        </div>
+        {uploadError && (
+          <div className="mt-2 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-600">
+            {uploadError}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -508,20 +471,6 @@ function DetectionOverlay({ image, detections, imageSize, headSource }: {
       {headSource && <div className="mt-1.5 text-[10px] text-slate-400">检测头：{headSource}</div>}
     </div>
   );
-}
-
-/* ── compact one-liner for the left-panel tool log (never stringifies dense masks) ── */
-
-function summarizeResult(result: unknown): string {
-  const parsed = parseMaybeJson(result);
-  if (parsed && typeof parsed === "object") {
-    const env = parsed as Record<string, unknown>;
-    const o = (env.result && typeof env.result === "object" ? env.result : env) as Record<string, unknown>;
-    if (Array.isArray(o.mask)) return `分割掩码 ${o.mask.length}×${(o.mask[0] as unknown[])?.length ?? 0}，${o.num_classes ?? "?"} 类`;
-    if (Array.isArray(o.detections)) return `检测到 ${o.detections.length} 个目标`;
-    if (env.ok === false && typeof env.error === "string") return `失败：${env.error}`;
-  }
-  return (typeof result === "string" ? result : JSON.stringify(result)).slice(0, 72);
 }
 
 function parseMaybeJson(v: unknown): unknown {
