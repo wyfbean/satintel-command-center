@@ -155,9 +155,9 @@ const BRIEFING_RE = /简报|概览|brief|summary|综述|总结/i;
  */
 function resolveFilter(dashboard: DashboardData, message: string | undefined, prior: string | null): string | null {
   if (!message) return prior;
+  if (RESET_RE.test(message)) return null;
   const named = matchSource(dashboard, message);
   if (named) return named;
-  if (RESET_RE.test(message)) return null;
   return prior;
 }
 
@@ -185,10 +185,22 @@ function buildWelcome(dashboard: DashboardData): string {
   ].join("\n");
 }
 
+function normalizeSourceText(value: string) {
+  return value.toLowerCase().replace(/[\s_\-·.。:：/\\|()[\]{}"'“”‘’]+/g, "");
+}
+
+function sourceAliases(name: string): string[] {
+  const parts = name.split(/[\s_\-·.。:：/\\|()[\]{}"'“”‘’]+/g);
+  return [name, ...parts]
+    .map(normalizeSourceText)
+    .filter((part) => part.length >= 3 || /[\u4e00-\u9fff]{2,}/.test(part));
+}
+
 /** Find a feed source name mentioned in the user's message, if any. */
 function matchSource(dashboard: DashboardData, text: string): string | null {
+  const normalizedText = normalizeSourceText(text);
   const names = Array.from(new Set(dashboard.items.map((item) => item.sourceName)));
-  return names.find((name) => name && text.includes(name)) ?? null;
+  return names.find((name) => name && sourceAliases(name).some((alias) => normalizedText.includes(alias))) ?? null;
 }
 
 function extractChatMessages(input: RunAgentInput): ChatMessage[] {

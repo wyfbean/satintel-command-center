@@ -113,6 +113,7 @@ export function NewsFeed({ data, activeSource, onClearSource, onSelect, onRefres
   function select(item: IntelItem | null) {
     // ── dwell check: was the previous article open long enough? ───────
     if (openedIdRef.current && openedAtRef.current !== null) {
+      // eslint-disable-next-line react-hooks/purity
       const dwellMs = Date.now() - openedAtRef.current;
       if (dwellMs >= DWELL_THRESHOLD_MS) {
         // dwell = weight 2 (stronger signal than a plain click)
@@ -127,6 +128,7 @@ export function NewsFeed({ data, activeSource, onClearSource, onSelect, onRefres
       // plain click signal (weight 1)
       trackEvent(item.id, 1);
       // start dwell timer
+      // eslint-disable-next-line react-hooks/purity
       openedAtRef.current = Date.now();
       openedIdRef.current = item.id;
     } else {

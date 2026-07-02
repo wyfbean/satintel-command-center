@@ -16,6 +16,7 @@ import type { DashboardData, IntelItem } from "@/types/intel";
 
 const AGENT_NAME = "satellite_dashboard";
 const useFrontendMock = process.env.NEXT_PUBLIC_FEED_MODE === "mock";
+const RESET_RE = /全部|所有|重置|清除|取消筛选|reset|clear|^all$/i;
 
 /* ── map server DashboardData → AG-UI agent state (hero seed) ──────── */
 
@@ -31,7 +32,20 @@ function toAgentState(d: DashboardData): DashboardAgentState {
   };
 }
 
-const RESET_RE = /全部|所有|重置|清除|取消筛选|reset|clear|^all$/i;
+function normalizeSourceText(value: string) {
+  return value.toLowerCase().replace(/[\s_\-·.。:：/\\|()[\]{}"'“”‘’]+/g, "");
+}
+
+function resolveSourceName(source: string | null | undefined, sources: string[]): string | null {
+  const raw = source?.trim();
+  if (!raw || RESET_RE.test(raw)) return null;
+
+  const normalized = normalizeSourceText(raw);
+  return sources.find((name) => {
+    const candidate = normalizeSourceText(name);
+    return candidate === normalized || candidate.includes(normalized) || normalized.includes(candidate);
+  }) ?? null;
+}
 
 /* ── public export ────────────────────────────────────────────────── */
 
@@ -51,7 +65,6 @@ function HomeWorkspace({ initialData, userId, userName }: HomeShellProps) {
   const bootData = useFrontendMock ? frontendMockDashboardData : initialData;
 
   const [feedData, setFeedData] = useState<DashboardData>(bootData);
-  const [activeSource, setActiveSource] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<IntelItem | null>(null);
   const [rssOpen, setRssOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -74,7 +87,6 @@ function HomeWorkspace({ initialData, userId, userName }: HomeShellProps) {
     })
       .then(() => localStorage.setItem("satintel_sid", userId))
       .catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
   // Top "今日趋势" hero is driven by the AG-UI agent's STATE_SNAPSHOT, seeded
@@ -93,19 +105,21 @@ function HomeWorkspace({ initialData, userId, userName }: HomeShellProps) {
     [feedData.items],
   );
 
+  const activeSource = resolveSourceName(agentState.appliedSource, sources);
+
+  function applySourceFilter(source: string | null) {
+    const matched = resolveSourceName(source, sources);
+    setSelectedItem(null);
+    setAgentState({ ...agentState, appliedSource: matched });
+  }
+
   // Chat-driven source filter (the official CopilotKit frontend-action loop).
   useCopilotAction({
     name: "filterBySource",
     description: "按来源名称筛选下方的资讯流。",
     parameters: [{ name: "source", type: "string", description: "要筛选的来源名称", required: true }],
     handler: ({ source }: { source: string }) => {
-      // The agent emits "全部"/empty to clear — never let .includes("") match all.
-      if (!source || RESET_RE.test(source)) {
-        setActiveSource(null);
-        return;
-      }
-      const matched = sources.find((n) => n === source || n.includes(source));
-      setActiveSource(matched ?? null);
+      applySourceFilter(source);
     },
   });
 
@@ -191,9 +205,10 @@ function HomeWorkspace({ initialData, userId, userName }: HomeShellProps) {
 
         {/* news feed */}
         <NewsFeed
+          key={activeSource ?? "all-sources"}
           data={feedData}
           activeSource={activeSource}
-          onClearSource={() => setActiveSource(null)}
+          onClearSource={() => applySourceFilter(null)}
           onSelect={setSelectedItem}
           onRefresh={() => startTransition(() => void refreshFeed())}
           isRefreshing={isPending}
