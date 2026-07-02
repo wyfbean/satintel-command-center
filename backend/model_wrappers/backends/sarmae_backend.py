@@ -134,6 +134,70 @@ def _kmeans_labels(feats, k: int):
     return labels
 
 
+def _to_uint8_channel(channel):
+    import numpy as np  # noqa: PLC0415
+
+    arr = np.asarray(channel)
+    if arr.dtype == np.uint8:
+        return arr
+    arr = arr.astype("float32", copy=False)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return np.zeros(arr.shape, dtype=np.uint8)
+    lo, hi = np.percentile(finite, [1, 99])
+    if hi <= lo:
+        lo, hi = float(finite.min()), float(finite.max())
+    if hi <= lo:
+        return np.zeros(arr.shape, dtype=np.uint8)
+    return np.clip((arr - lo) * 255.0 / (hi - lo), 0, 255).astype(np.uint8)
+
+
+def _ensure_mmdet_readable_image(image_path: Path, mmcv_imread) -> tuple[Path, bool]:
+    """Return an image path that MMDetection/MMCV can decode.
+
+    SAR uploads are commonly 16-bit grayscale TIFF/GeoTIFF files. Older
+    OpenMMLab pipelines call mmcv/cv2.imread inside LoadImageFromFile; when
+    that returns None the next pipeline step fails with the misleading
+    `'NoneType' object has no attribute 'shape'`. Convert such inputs to an
+    8-bit RGB PNG before invoking inference_detector.
+    """
+    try:
+        probe = mmcv_imread(str(image_path))
+        if probe is not None and getattr(probe, "shape", None) is not None:
+            return image_path, False
+    except Exception:  # noqa: BLE001 - fall through to conversion
+        pass
+
+    import numpy as np  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
+
+    with Image.open(image_path) as img:
+        arr = np.asarray(img)
+
+    if arr.ndim == 2:
+        ch = _to_uint8_channel(arr)
+        rgb = np.stack([ch, ch, ch], axis=-1)
+    elif arr.ndim == 3:
+        # Some TIFF readers expose band-first arrays. Convert small-band
+        # channel-first tensors to HWC before selecting RGB-like channels.
+        if arr.shape[0] <= 16 and arr.shape[1] > 32 and arr.shape[2] > 32 and arr.shape[-1] > 16:
+            arr = np.moveaxis(arr, 0, -1)
+        if arr.shape[-1] == 1:
+            ch = _to_uint8_channel(arr[..., 0])
+            rgb = np.stack([ch, ch, ch], axis=-1)
+        else:
+            bands = [_to_uint8_channel(arr[..., i]) for i in range(min(3, arr.shape[-1]))]
+            while len(bands) < 3:
+                bands.append(bands[-1])
+            rgb = np.stack(bands[:3], axis=-1)
+    else:
+        raise ValueError(f"unsupported image array shape for SARMAE detect: {arr.shape}")
+
+    out = OUTPUT_DIR / f"_sarmae_detect_input_{abs(hash(str(image_path)))}.png"
+    Image.fromarray(rgb, mode="RGB").save(out)
+    return out, True
+
+
 def _real_detect(image_path: Path, device: str) -> dict[str, Any]:
     """Real SAR rotated detection via mmrotate (deployment GPU box only)."""
     import importlib.util  # noqa: PLC0415
@@ -145,7 +209,7 @@ def _real_detect(image_path: Path, device: str) -> dict[str, Any]:
         sys.path.insert(0, repo)
 
     try:
-        from mmcv import Config  # noqa: PLC0415
+        from mmcv import Config, imread  # noqa: PLC0415
         from mmdet.apis import inference_detector, init_detector  # noqa: PLC0415
         import mmrotate  # noqa: F401,PLC0415  (registers rotated modules)
     except ImportError as exc:
@@ -182,7 +246,8 @@ def _real_detect(image_path: Path, device: str) -> dict[str, Any]:
         cfg.model.backbone.pretrained = None
 
     model = init_detector(cfg, str(_DETECT_CKPT), device=device)
-    res = inference_detector(model, str(image_path))
+    detect_image_path, converted_input = _ensure_mmdet_readable_image(image_path, imread)
+    res = inference_detector(model, str(detect_image_path))
     names = getattr(getattr(model, "dataset_meta", None), "get", lambda *_: None)("classes") or getattr(model, "CLASSES", None) or ["ship"]
     dets = []
     if hasattr(res, "pred_instances"):
@@ -190,24 +255,32 @@ def _real_detect(image_path: Path, device: str) -> dict[str, Any]:
         bboxes = inst.bboxes.cpu().numpy().tolist()
         scores = inst.scores.cpu().numpy().tolist()
         labels = inst.labels.cpu().numpy().tolist()
-        dets = [
-            {"class": names[lab] if lab < len(names) else str(lab), "bbox": box, "confidence": round(float(s), 3)}
-            for box, s, lab in zip(bboxes, scores, labels) if s >= 0.3
-        ]
+        dets = []
+        for box, score, label in zip(bboxes, scores, labels):
+            if score < 0.3:
+                continue
+            item = {"class": names[label] if label < len(names) else str(label), "confidence": round(float(score), 3)}
+            item["rbox" if len(box) == 5 else "bbox"] = box
+            dets.append(item)
     elif isinstance(res, (list, tuple)):
         bbox_result = res[0] if res and isinstance(res[0], list) else res
         for cls_idx, cls_boxes in enumerate(bbox_result):
             for row in cls_boxes:
                 vals = row.tolist() if hasattr(row, "tolist") else list(row)
                 if len(vals) >= 5 and float(vals[-1]) >= 0.3:
-                    dets.append({
+                    coords = vals[:-1]
+                    item = {
                         "class": names[cls_idx] if cls_idx < len(names) else str(cls_idx),
-                        "bbox": vals[:-1],
                         "confidence": round(float(vals[-1]), 3),
-                    })
+                    }
+                    item["rbox" if len(coords) == 5 else "bbox"] = coords
+                    dets.append(item)
     from PIL import Image  # noqa: PLC0415
 
-    return {"image_size": list(Image.open(image_path).size), "detections": dets, "count": len(dets)}
+    result = {"image_size": list(Image.open(image_path).size), "detections": dets, "count": len(dets)}
+    if converted_input:
+        result["input_preprocessed"] = "converted SAR/TIFF input to 8-bit RGB PNG for MMDetection image loading"
+    return result
 
 def run(image: str, task: str = "detect") -> dict[str, Any]:
     started = time.monotonic()
@@ -264,6 +337,11 @@ def run(image: str, task: str = "detect") -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001 - surface real detector setup errors
                 detail = traceback.format_exc(limit=4)
                 msg = str(exc)
+                if "NoneType' object has no attribute 'shape" in msg:
+                    return envelope(model=MODEL_NAME, task=task, ok=False,
+                                    error=("SARMAE real-detect could not load the image through MMDetection even after "
+                                           "SAR/TIFF preprocessing. The input may be corrupt or in an unsupported raster layout."),
+                                    device=device, weights=str(_DETECT_CKPT), started_at=started)
                 if device == "cuda" and ("cuDNN" in msg or "CUDNN" in msg):
                     try:
                         res = _real_detect(image_path, "cpu")

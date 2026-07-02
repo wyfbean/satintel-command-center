@@ -59,7 +59,8 @@ _SARMAE_GUIDE = (
     "当用户明确说“使用 UPerHead / UPer 进行分割”时，UPerHead 在本系统中专指 SARMAE 的真实分割头，"
     "若已附加图像则必须直接调用 sarmae task='segment'，不要反问影像类型；"
     "sarmae task='detect' 当前也可用，使用 detect_epoch_34.pth 的真实 fine-tuned mmrotate rotated detector；"
-    "检测路径在 CUDA/cuDNN 不兼容时可能自动回退到 CPU，但仍是真检测，不是 k-means proxy。"
+    "若检测失败，必须按工具 error 的具体原因解释；不要把普通读图失败/输入格式失败归因于 CUDA/cuDNN，"
+    "也不要声称已 CPU 回退，除非工具结果中明确写了 cpu retry。"
 )
 
 
