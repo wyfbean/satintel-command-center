@@ -4,7 +4,7 @@ import "@copilotkit/react-ui/styles.css";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CopilotKit, useCopilotAction, useCopilotChat, useCopilotReadable } from "@copilotkit/react-core";
-import { CopilotChat } from "@copilotkit/react-ui";
+import { AssistantMessage, CopilotChat, ImageRenderer, UserMessage, type RenderMessageProps } from "@copilotkit/react-ui";
 import { Role, TextMessage } from "@copilotkit/runtime-client-gql";
 import { fromBlob } from "geotiff";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -27,6 +27,7 @@ export function OrchestrationShell() {
 type Region = { label: string; bbox: [number, number, number, number]; color: string; score: number };
 type ClassStat = { class_id: number; pixels?: number; ratio?: number };
 type Detection = { class?: string; class_id?: number; confidence?: number; score?: number; rbox?: number[]; bbox?: number[] };
+type SentAttachmentBatch = { messageId: string; images: AttachedImage[] };
 type AttachedImage = {
   dataUrl: string;
   name: string;
@@ -76,12 +77,21 @@ function OrchestrationWorkspace() {
   const [images, setImages] = useState<AttachedImage[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
+  const [sentAttachments, setSentAttachments] = useState<SentAttachmentBatch[]>([]);
+  const [runImages, setRunImages] = useState<AttachedImage[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const pendingAttachmentRef = useRef<SentAttachmentBatch | null>(null);
+  const wasLoadingRef = useRef(false);
   const { visibleMessages, appendMessage, isLoading } = useCopilotChat();
   // `visibleMessages` is undefined on the first render (before the agent connects),
   // despite its non-nullable type — guard it so we don't read `.length` of undefined.
   const conversationEmpty = (visibleMessages?.length ?? 0) === 0;
-  const primaryImage = images[0] ?? null;
+  const primaryImage = images[0] ?? runImages[0] ?? null;
+  const sentAttachmentsByMessage = useMemo(() => {
+    const map = new Map<string, AttachedImage[]>();
+    for (const batch of sentAttachments) map.set(batch.messageId, batch.images);
+    return map;
+  }, [sentAttachments]);
 
   useEffect(() => {
     let active = true;
@@ -91,6 +101,35 @@ function OrchestrationWorkspace() {
       .catch(() => active && setBackendOnline(false));
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    const visible = (visibleMessages ?? []) as Array<{ id?: string; role?: string }>;
+    const latestUserMessage = [...visible].reverse().find((message) => message.role === "user");
+    const latestUserMessageId = typeof latestUserMessage?.id === "string" ? latestUserMessage.id : null;
+
+    if (isLoading && !wasLoadingRef.current) {
+      if (images.length > 0 && latestUserMessageId) {
+        const snapshot = [...images];
+        pendingAttachmentRef.current = { messageId: latestUserMessageId, images: snapshot };
+        queueMicrotask(() => setRunImages(snapshot));
+      }
+      wasLoadingRef.current = true;
+    }
+
+    if (!isLoading && wasLoadingRef.current) {
+      const pending = pendingAttachmentRef.current;
+      if (pending) {
+        setSentAttachments((prev) => {
+          const withoutSameMessage = prev.filter((batch) => batch.messageId !== pending.messageId);
+          return [...withoutSameMessage, pending];
+        });
+        setImages([]);
+        setUploadError(null);
+        pendingAttachmentRef.current = null;
+      }
+      wasLoadingRef.current = false;
+    }
+  }, [images, isLoading, visibleMessages]);
 
   useCopilotReadable({ description: "attached_satellite_image", value: primaryImage?.rawRef ?? primaryImage?.dataUrl ?? "" });
   useCopilotReadable({
@@ -151,6 +190,7 @@ function OrchestrationWorkspace() {
         <div className="relative h-full [&_.copilotKitHeader]:hidden [&_.copilotKitInputContainer]:border-t [&_.copilotKitInputContainer]:border-[#e2e8f0] [&_.copilotKitInputContainer]:bg-white [&_.copilotKitInputContainer]:pt-2 [&_.copilotKitMessages]:bg-[#f9fafb]">
           <CopilotChat
             className="h-full"
+            RenderMessage={(props) => <ChatMessageWithAttachments {...props} sentAttachmentsByMessage={sentAttachmentsByMessage} />}
             labels={{
               title: "",
               initial: "描述分析需求，或附加卫星 / SAR 图像后提问，我会调用 DOFA / SATtxt / MTP 等模型工具完成分析。",
@@ -166,6 +206,63 @@ function OrchestrationWorkspace() {
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+function ChatMessageWithAttachments({
+  sentAttachmentsByMessage,
+  ...props
+}: RenderMessageProps & { sentAttachmentsByMessage: Map<string, AttachedImage[]> }) {
+  const {
+    message, messages, inProgress, isCurrentMessage, onRegenerate, onCopy, onThumbsUp, onThumbsDown,
+    messageFeedback, markdownTagRenderers,
+  } = props;
+
+  if (message.role === "user") {
+    const images = sentAttachmentsByMessage.get(message.id) ?? [];
+    return (
+      <div key={message.id}>
+        <UserMessage rawData={message} message={message} ImageRenderer={ImageRenderer} />
+        {images.length > 0 && <SentMessageAttachments images={images} />}
+      </div>
+    );
+  }
+
+  if (message.role === "assistant") {
+    return (
+      <AssistantMessage
+        key={message.id}
+        rawData={message}
+        message={message}
+        messages={messages}
+        isLoading={inProgress && isCurrentMessage && !message.content}
+        isGenerating={inProgress && isCurrentMessage && Boolean(message.content)}
+        isCurrentMessage={isCurrentMessage}
+        onRegenerate={() => onRegenerate?.(message.id)}
+        onCopy={onCopy}
+        onThumbsUp={onThumbsUp}
+        onThumbsDown={onThumbsDown}
+        feedback={messageFeedback?.[message.id] ?? null}
+        markdownTagRenderers={markdownTagRenderers}
+        ImageRenderer={ImageRenderer}
+        subComponent={message.generativeUI?.()}
+      />
+    );
+  }
+
+  return null;
+}
+
+function SentMessageAttachments({ images }: { images: AttachedImage[] }) {
+  return (
+    <div className="ml-auto mt-1 flex max-w-[70%] flex-wrap justify-end gap-2 pr-2">
+      {images.map((item, index) => (
+        <div key={`${item.name}_${index}`} className="overflow-hidden rounded-xl border border-[#e2e8f0] bg-white shadow-sm">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={item.dataUrl} alt={item.name} className="h-24 w-24 object-cover" />
+        </div>
+      ))}
     </div>
   );
 }
