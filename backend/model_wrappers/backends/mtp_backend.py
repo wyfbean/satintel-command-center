@@ -104,10 +104,12 @@ def _run_mmdet_inference(image: str, cfg: str, ckpt: str, score_thr: float, devi
 
     from mmdet.apis import inference_detector, init_detector  # noqa: PLC0415
 
+    cfg_obj = _load_inference_config(cfg)
+
     # `palette='random'` avoids mmdet building the config's test dataset just to
     # fetch palette metadata. The shipped config points to the authors' training
     # data path, which is not present on this deployment host.
-    model = init_detector(cfg, ckpt, device=device, palette="random")
+    model = init_detector(cfg_obj, ckpt, device=device, palette="random")
     model.dataset_meta = {"classes": _DIOR_CLASSES, "palette": "random"}
     result = inference_detector(model, image)
 
@@ -145,6 +147,33 @@ def _run_mmdet_inference(image: str, cfg: str, ckpt: str, score_thr: float, devi
         result={"image_size": image_size, "detections": detections, "count": len(detections)},
         device=device, weights=ckpt, started_at=started,
     )
+
+
+def _load_inference_config(cfg: str):
+    from mmengine.config import Config  # noqa: PLC0415
+
+    cfg_obj = Config.fromfile(cfg)
+    img_size = int(cfg_obj.model.backbone.get("img_size", 800))
+
+    def patch_pipeline(pipeline):
+        if not pipeline:
+            return
+        for step in pipeline:
+            if step.get("type") == "Resize":
+                step["scale"] = (img_size, img_size)
+                step["keep_ratio"] = False
+
+    # The RVSA backbone in the released MTP DIOR config uses absolute position
+    # embeddings for img_size=800 (50x50=2500 patch tokens). The original test
+    # pipeline keeps aspect ratio, so a non-square upload can become e.g.
+    # 800x704 (50x44=2200 tokens) and crash with `tensor a (2200) ... b (2500)`.
+    # Force square inference only at runtime; do not mutate the checkpoint config.
+    patch_pipeline(cfg_obj.get("test_pipeline"))
+    try:
+        patch_pipeline(cfg_obj.test_dataloader.dataset.pipeline)
+    except AttributeError:
+        pass
+    return cfg_obj
 
 
 def _register_horizontal_mtp_modules() -> None:
