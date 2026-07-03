@@ -26,7 +26,7 @@ export function OrchestrationShell() {
 
 type Region = { label: string; bbox: [number, number, number, number]; color: string; score: number };
 type ClassStat = { class_id: number; pixels?: number; ratio?: number };
-type Detection = { class?: string; confidence?: number; rbox?: number[]; bbox?: number[] };
+type Detection = { class?: string; class_id?: number; confidence?: number; score?: number; rbox?: number[]; bbox?: number[] };
 type AttachedImage = {
   dataUrl: string;
   name: string;
@@ -307,14 +307,14 @@ function ToolCard({ name, args, status, result, image }: {
       </div>
       <div className="p-3">
         {mask && <MaskOverlay image={image} mask={mask} classDist={classDist} headSource={headSource} />}
-        {detections && <DetectionOverlay image={image} detections={detections} imageSize={imageSize} headSource={headSource} />}
+        {detections && <DetectionOverlay toolName={name} image={image} detections={detections} imageSize={imageSize} headSource={headSource} />}
         {regions && image && <SegmentationOverlay image={image} regions={regions} />}
         {objects && (
           <div className="space-y-1">
             {objects.map((o, i) => (
               <div key={i} className="flex justify-between rounded-lg bg-[#f8fafc] px-3 py-1.5 text-xs">
                 <span className="font-medium text-slate-700">{String(o.class ?? "目标")}</span>
-                <span className="text-slate-400">置信度 {String(o.confidence ?? "—")}</span>
+                <span className="text-slate-400">置信度 {formatConfidence(o.confidence ?? o.score)}</span>
               </div>
             ))}
           </div>
@@ -417,11 +417,20 @@ function MaskOverlay({ image, mask, classDist, headSource }: {
 
 /* ── detection overlay: rotated (rbox) + axis-aligned (bbox) boxes ──── */
 
-function DetectionOverlay({ image, detections, imageSize, headSource }: {
-  image: string | null; detections: Detection[]; imageSize: number[] | null; headSource: string | null;
+function DetectionOverlay({ toolName, image, detections, imageSize, headSource }: {
+  toolName: string; image: string | null; detections: Detection[]; imageSize: number[] | null; headSource: string | null;
 }) {
   const [iw, ih] = imageSize && imageSize.length >= 2 ? imageSize : [0, 0];
   const rect = (x1: number, y1: number, x2: number, y2: number) => `${x1},${y1} ${x2},${y1} ${x2},${y2} ${x1},${y2}`;
+  const toViewBox = (box: number[], forcePixels = false): [number, number, number, number] | null => {
+    if (box.length < 4) return null;
+    const [x1, y1, x2, y2] = box;
+    const looksPixel = forcePixels || box.slice(0, 4).some((v) => Math.abs(v) > 100);
+    if (looksPixel && iw && ih) {
+      return [x1 / iw * 100, y1 / ih * 100, x2 / iw * 100, y2 / ih * 100];
+    }
+    return [x1, y1, x2, y2];
+  };
   const polyFor = (d: Detection): string | null => {
     if (Array.isArray(d.rbox) && d.rbox.length === 5 && iw && ih) {
       const [cx, cy, w, h, a] = d.rbox; // rotated [cx,cy,w,h,angle] in pixels; angle assumed radians (mmrotate)
@@ -430,13 +439,16 @@ function DetectionOverlay({ image, detections, imageSize, headSource }: {
         .map(([ox, oy]) => `${((cx + cos * ox - sin * oy) / iw * 100).toFixed(2)},${((cy + sin * ox + cos * oy) / ih * 100).toFixed(2)}`)
         .join(" ");
     }
-    if (Array.isArray(d.bbox) && d.bbox.length >= 4) {
-      const [x1, y1, x2, y2] = d.bbox; // k-means proxy bbox is already in 0–100 viewBox coords
-      return rect(x1, y1, x2, y2);
+    if (Array.isArray(d.bbox)) {
+      // MTP/MMDetection returns pixel-space bbox coordinates; SARMAE k-means proxy
+      // still emits 0-100 viewBox coordinates. Use the tool name to avoid shrinking
+      // proxy boxes when an image_size is also present.
+      const normalized = toViewBox(d.bbox, toolName === "mtp");
+      return normalized ? rect(...normalized) : null;
     }
-    if (Array.isArray(d.rbox) && d.rbox.length === 4 && iw && ih) {
-      const [x1, y1, x2, y2] = d.rbox.map((v, k) => (v / (k % 2 === 0 ? iw : ih)) * 100); // axis-aligned pixels → normalize
-      return rect(x1, y1, x2, y2);
+    if (Array.isArray(d.rbox) && d.rbox.length === 4) {
+      const normalized = toViewBox(d.rbox, true);
+      return normalized ? rect(...normalized) : null;
     }
     return null;
   };
@@ -460,9 +472,9 @@ function DetectionOverlay({ image, detections, imageSize, headSource }: {
           <div key={i} className="flex items-center justify-between rounded-lg bg-[#f8fafc] px-3 py-1.5 text-xs">
             <span className="flex items-center gap-1.5 font-medium text-slate-700">
               <span className="h-2.5 w-2.5 rounded-sm" style={{ background: classColor(i) }} />
-              {String(d.class ?? "目标")}
+              {String(d.class ?? (d.class_id != null ? `类别 ${d.class_id}` : "目标"))}
             </span>
-            <span className="text-slate-400">置信度 {d.confidence != null ? Number(d.confidence).toFixed(2) : "—"}</span>
+            <span className="text-slate-400">置信度 {formatConfidence(d.confidence ?? d.score)}</span>
           </div>
         ))}
         {detections.length > 12 && <div className="text-[11px] text-slate-400">…共 {detections.length} 个目标</div>}
@@ -471,6 +483,11 @@ function DetectionOverlay({ image, detections, imageSize, headSource }: {
       {headSource && <div className="mt-1.5 text-[10px] text-slate-400">检测头：{headSource}</div>}
     </div>
   );
+}
+
+function formatConfidence(value: unknown): string {
+  const num = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(num) ? num.toFixed(2) : "—";
 }
 
 function parseMaybeJson(v: unknown): unknown {
